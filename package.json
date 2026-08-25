@@ -1,0 +1,18 @@
+{
+  "name": "bitcoin",
+  "version": "1.0.0",
+  "description": "",
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@binance/futures-connector": "^0.1.7",
+    "axios": "^1.19.0",
+    "fast-csv": "^5.0.7",
+    "ws": "^8.21.3"
+  }
+}
