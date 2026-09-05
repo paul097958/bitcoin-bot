@@ -1,8 +1,21 @@
 const axios = require('axios');
+require('dotenv').config()
 const fs = require('fs');
 const format = require('@fast-csv/format');
 const WebSocket = require('ws');
+const { USDMClient } = require('binance');
 
+
+// 填入你的 API Key 與 Secret
+const apiKey = process.env.API_KEY;
+const apiSecret = process.env.API_SECRET;
+
+const client = new USDMClient({
+    api_key: apiKey,
+    api_secret: apiSecret,
+    // Connect to testnet environment
+    testnet: true,
+});
 
 // 監聽的 20 個標的 (幣安合約 symbol 格式為大寫)
 const SYMBOLS = [
@@ -55,6 +68,475 @@ async function getKlines(symbol, interval = '1m', limit = 100) {
     }
 }
 
+// 1. 精準計算小數位數（支援 1e-7 等科學記號）
+function getExactDecimalPlaces(num) {
+    const numStr = num.toString();
+    if (numStr.includes('e') || numStr.includes('E')) {
+        const [base, exponent] = numStr.toLowerCase().split('e');
+        const exp = Math.abs(parseInt(exponent, 10));
+        const baseDecimals = base.includes('.') ? base.split('.')[1].length : 0;
+        return exp + baseDecimals;
+    }
+    return numStr.includes('.') ? numStr.split('.')[1].length : 0;
+}
+
+// 2. 將價格或數量「強制對齊」到 step/tickSize 的整數倍
+function adjustToStep(value, step) {
+    const precision = getExactDecimalPlaces(step);
+    // 先算倍數四捨五入，再用 toFixed 強制保留位數
+    const adjusted = Math.round(value / step) * step;
+    return adjusted.toFixed(precision);
+}
+
+function getSymbolFilters(symbol) {
+    switch (symbol) {
+        case 'BTCUSDT': return { tickSize: 0.1, stepSize: 0.001 };
+        case 'ETHUSDT': return { tickSize: 0.01, stepSize: 0.001 };
+        case 'SOLUSDT': return { tickSize: 0.01, stepSize: 0.01 };
+        case 'BNBUSDT': return { tickSize: 0.01, stepSize: 0.01 };
+        case 'XRPUSDT': return { tickSize: 0.0001, stepSize: 0.1 };
+        case 'DOGEUSDT': return { tickSize: 0.00001, stepSize: 1 };
+        case 'ADAUSDT': return { tickSize: 0.0001, stepSize: 1 };
+        case 'AVAXUSDT': return { tickSize: 0.001, stepSize: 1 };
+        case 'SUIUSDT': return { tickSize: 0.0001, stepSize: 0.1 };
+        case 'LINKUSDT': return { tickSize: 0.001, stepSize: 0.01 };
+        case 'NEARUSDT': return { tickSize: 0.001, stepSize: 1 };
+        case 'APTUSDT': return { tickSize: 0.001, stepSize: 0.1 };
+        case 'FETUSDT': return { tickSize: 0.0001, stepSize: 1 };
+        case 'WIFUSDT': return { tickSize: 0.0001, stepSize: 1 };
+        case 'ORDIUSDT': return { tickSize: 0.001, stepSize: 0.1 };
+        case 'LDOUSDT': return { tickSize: 0.001, stepSize: 1 };
+        case 'FILUSDT': return { tickSize: 0.001, stepSize: 0.1 };
+        case 'LTCUSDT': return { tickSize: 0.01, stepSize: 0.001 };
+        case 'BCHUSDT': return { tickSize: 0.01, stepSize: 0.001 };
+        default:
+            throw new Error(`未知的交易對: ${symbol}`);
+    }
+}
+
+async function getActualPosition(symbol) {
+    const positions = await client.getPositions({
+        symbol: symbol
+    });
+
+    const position = positions.find(
+        p => p.symbol === symbol
+    );
+
+    if (!position) {
+        return {
+            amount: 0,
+            quantity: 0,
+            side: null,
+            position: null
+        };
+    }
+
+    const amount = parseFloat(
+        position.positionAmt || 0
+    );
+
+    return {
+        amount: amount,
+        quantity: Math.abs(amount),
+        side: amount > 0
+            ? 'SELL'   // 多單 → SELL 平倉
+            : amount < 0
+                ? 'BUY' // 空單 → BUY 平倉
+                : null,
+        position: position
+    };
+}
+
+
+async function runTrading(symbol, price, quantity, direction) {
+    try {
+        const filters = getSymbolFilters(symbol);
+        const isUp = direction === 'UP';
+
+        // 精準對齊價格與數量
+        const rawLimitPrice = price * (isUp ? 1.0002 : 0.9998);
+        const rawTriggerPrice = price * (isUp ? 0.995 : 1.005);
+
+        const limitPrice = adjustToStep(rawLimitPrice, filters.tickSize);
+        const triggerPrice = adjustToStep(rawTriggerPrice, filters.tickSize);
+        const finalQuantity = adjustToStep(quantity, filters.stepSize);
+
+        await client.setLeverage({
+            symbol: symbol,
+            leverage: 10
+        })
+        // 1. 發送限價開倉單
+        const buyOrder = await client.submitNewOrder({
+            symbol: symbol,
+            side: isUp ? 'BUY' : 'SELL',
+            type: 'LIMIT',
+            price: limitPrice,
+            quantity: finalQuantity,
+            timeInForce: 'GTC',
+        });
+        console.log(`[${symbol}] 開倉單發送成功：`, buyOrder);
+
+        // 1 分鐘未成交自動撤單
+        setTimeout(async () => {
+            try {
+                const currentOrder = await client.getOrder({ symbol, orderId: buyOrder.orderId });
+                if (currentOrder.status === 'NEW' || currentOrder.status === 'PARTIALLY_FILLED') {
+                    console.log(`[${symbol}] 1 分鐘未完全成交，準備撤單...`);
+                    await client.cancelOrder({ symbol, orderId: buyOrder.orderId });
+                }
+            } catch (cancelErr) {
+                console.error(`[${symbol}] 檢查或撤單失敗：`, cancelErr.message);
+            }
+        }, 60 * 1000);
+        const stopLossOrderCondition = await getActualPosition(symbol)
+
+        // 2. 掛條件止損單 (改用 quantity + reduceOnly 避免 GTE 無持倉報錯)
+        const stopLossOrder = await client.submitNewAlgoOrder({
+            symbol: symbol,
+            side: isUp ? 'SELL' : 'BUY',
+            type: 'STOP_MARKET',
+            triggerPrice: triggerPrice,
+            quantity: finalQuantity,     // ✅ 明確傳入數量
+            reduceOnly: 'true',          // ✅ 用 reduceOnly 防呆，不會觸發強制 GTE
+            timeInForce: 'GTC',          // ✅ 強制允許無持倉時先掛單
+            workingType: 'MARK_PRICE',
+            algoType: 'CONDITIONAL'
+        });
+        console.log(`[${symbol}] 止損單掛單成功：`, stopLossOrder);
+        return limitPrice;
+
+    } catch (err) {
+        console.error(`[${symbol}] 交易執行失敗：`, err);
+        return null;
+    }
+}
+
+async function immediateStopLoss(symbol, direction) {
+    try {
+        const stopLossCondition= await getActualPosition(symbol)
+
+        const result = await client.submitNewOrder({
+            symbol: symbol,
+            side: direction === 'UP' ? 'SELL' : 'BUY',
+            type: 'MARKET',
+            quantity: stopLossCondition.quantity,
+            reduceOnly: 'true',
+        });
+
+        console.log(`[${symbol}] 已執行市價平倉：`, result);
+        return result;
+    } catch (err) {
+        console.error(`[${symbol}] 市價平倉失敗：`, err.message);
+    }
+}
+
+// 限價平倉/止盈 (逾時未成交自動轉市價)
+async function limitClose(
+    symbol,
+    targetPrice,
+    quantity,
+    direction,
+    isStopLoss = false,
+    basePrice,
+    index
+) {
+    try {
+        const filters = getSymbolFilters(symbol);
+
+        const isUp = direction === 'UP';
+        const isChanged = isStopLoss ? !isUp : isUp;
+
+        // =========================================================
+        // 1. 取得目前實際持倉
+        // =========================================================
+        const positions = await client.getPositions({
+            symbol: symbol
+        });
+
+        const position = positions.find(p => p.symbol === symbol);
+
+        if (!position) {
+            console.log(`[${symbol}] 找不到持倉資料，取消平倉`);
+            return null;
+        }
+
+        const positionAmt = parseFloat(position.positionAmt || 0);
+
+        // 已經沒有持倉
+        if (positionAmt === 0) {
+            console.log(`[${symbol}] 目前沒有持倉，不需要平倉`);
+            return null;
+        }
+
+        // =========================================================
+        // 2. 根據實際 positionAmt 決定平倉方向
+        //
+        // positionAmt > 0 = 多單 → SELL
+        // positionAmt < 0 = 空單 → BUY
+        // =========================================================
+        const side = positionAmt > 0 ? 'SELL' : 'BUY';
+
+        const actualPositionQty = Math.abs(positionAmt);
+
+
+        const finalQty = adjustToStep(
+            actualPositionQty,
+            filters.stepSize
+        );
+
+        if (finalQty <= 0) {
+            console.log(
+                `[${symbol}] 平倉數量不足，` +
+                `要求=${quantity}，實際持倉=${actualPositionQty}`
+            );
+            return null;
+        }
+
+        // =========================================================
+        // 3. 計算限價
+        // =========================================================
+        const rawTargetPrice =
+            targetPrice * (isChanged ? 1.0002 : 0.9998);
+
+        const finalPrice = adjustToStep(
+            rawTargetPrice,
+            filters.tickSize
+        );
+
+        console.log(
+            `[${symbol}] 準備限價平倉 | ` +
+            `side=${side} | ` +
+            `position=${actualPositionQty} | ` +
+            `request=${quantity} | ` +
+            `close=${finalQty} | ` +
+            `price=${finalPrice}`
+        );
+
+        // =========================================================
+        // 4. 取消這個 symbol 的其他掛單
+        // =========================================================
+        await client.cancelAllOpenOrders({
+            symbol: symbol
+        });
+
+        // =========================================================
+        // 5. 再次確認持倉
+        //
+        // cancelAllOpenOrders 後重新取得一次，
+        // 避免取消訂單的過程中持倉發生變化。
+        // =========================================================
+        const positionsBeforeOrder = await client.getPositions({
+            symbol: symbol
+        });
+
+        const positionBeforeOrder =
+            positionsBeforeOrder.find(p => p.symbol === symbol);
+
+        const positionAmtBeforeOrder =
+            parseFloat(positionBeforeOrder?.positionAmt || 0);
+
+        if (positionAmtBeforeOrder === 0) {
+            console.log(
+                `[${symbol}] 下單前持倉已變成 0，不需要平倉`
+            );
+            return null;
+        }
+
+        const latestPositionQty =
+            Math.abs(positionAmtBeforeOrder);
+
+        const latestCloseQty = Math.min(
+            finalQty,
+            latestPositionQty
+        );
+
+        const finalOrderQty = adjustToStep(
+            latestCloseQty,
+            filters.stepSize
+        );
+
+        if (finalOrderQty <= 0) {
+            console.log(`[${symbol}] 最終平倉數量為 0`);
+            return null;
+        }
+
+        // 根據最新持倉重新確認 side
+        const finalSide =
+            positionAmtBeforeOrder > 0 ? 'SELL' : 'BUY';
+
+        // =========================================================
+        // 6. 發送 LIMIT reduceOnly
+        // =========================================================
+        const result = await client.submitNewOrder({
+            symbol: symbol,
+            side: finalSide,
+            type: 'LIMIT',
+            price: finalPrice,
+            quantity: finalOrderQty,
+            timeInForce: 'GTC',
+            reduceOnly: 'true',
+        });
+
+        console.log(
+            `[${symbol}] 限價平倉單已掛出，` +
+            `單號=${result.orderId}，` +
+            `方向=${finalSide}，` +
+            `數量=${finalOrderQty}，` +
+            `價格=${finalPrice}`
+        );
+
+        // =========================================================
+        // 7. 30 秒後檢查訂單
+        // =========================================================
+        setTimeout(async () => {
+            try {
+                const currentOrder = await client.getOrder({
+                    symbol: symbol,
+                    orderId: result.orderId,
+                });
+
+                console.log(
+                    `[${symbol}] 30 秒檢查，` +
+                    `訂單狀態=${currentOrder.status}`
+                );
+
+                // =====================================================
+                // 訂單尚未完全成交
+                // =====================================================
+                if (
+                    currentOrder.status === 'NEW' ||
+                    currentOrder.status === 'PARTIALLY_FILLED'
+                ) {
+                    console.log(
+                        `[${symbol}] 限價單未完全成交，準備撤單`
+                    );
+
+                    // -------------------------------------------------
+                    // 1. 撤銷 LIMIT
+                    // -------------------------------------------------
+                    try {
+                        await client.cancelOrder({
+                            symbol: symbol,
+                            orderId: result.orderId,
+                        });
+                    } catch (cancelError) {
+                        console.error(
+                            `[${symbol}] 撤銷限價單失敗：`,
+                            cancelError.message
+                        );
+                    }
+
+                    // -------------------------------------------------
+                    // 2. 重新取得「目前實際持倉」
+                    //
+                    // ★ 不再使用：
+                    // quantity - executedQty
+                    //
+                    // 而是直接看 Binance 現在還剩多少。
+                    // -------------------------------------------------
+                    const latestPositions =
+                        await client.getPositions({
+                            symbol: symbol
+                        });
+
+                    const latestPosition =
+                        latestPositions.find(
+                            p => p.symbol === symbol
+                        );
+
+                    const latestPositionAmt =
+                        parseFloat(
+                            latestPosition?.positionAmt || 0
+                        );
+
+                    const remainingQty =
+                        Math.abs(latestPositionAmt);
+
+                    // -------------------------------------------------
+                    // 3. 已經沒有持倉
+                    // -------------------------------------------------
+                    if (remainingQty <= 0) {
+                        console.log(
+                            `[${symbol}] 限價單成交後已無持倉，不需要市價平倉`
+                        );
+                    } else {
+                        // -------------------------------------------------
+                        // 4. 對齊 stepSize
+                        // -------------------------------------------------
+                        const marketQty = adjustToStep(
+                            remainingQty,
+                            filters.stepSize
+                        );
+
+                        if (marketQty > 0) {
+                            console.log(
+                                `[${symbol}] 剩餘實際持倉 ` +
+                                `${remainingQty}，` +
+                                `補發市價平倉 ${marketQty}`
+                            );
+
+                            await immediateStopLoss(
+                                symbol,
+                                direction
+                            );
+                        } else {
+                            console.log(
+                                `[${symbol}] 剩餘持倉小於最小 stepSize`
+                            );
+                        }
+                    }
+                } else {
+                    console.log(
+                        `[${symbol}] 30 秒到期，` +
+                        `訂單狀態=${currentOrder.status}，無需處理`
+                    );
+                }
+
+                // =====================================================
+                // 5. 移除監控
+                // =====================================================
+                if (
+                    index >= 0 &&
+                    index < activeMonitors.length
+                ) {
+                    activeMonitors.splice(index, 1);
+                }
+
+                // =====================================================
+                // 6. 計算報酬
+                // =====================================================
+                countPercent.push([
+                    symbol,
+                    direction,
+                    (isUp ? 1 : -1) *
+                    (finalPrice - basePrice) /
+                    basePrice *
+                    100,
+                    basePrice,
+                    finalPrice,
+                    Date.now()
+                ]);
+
+            } catch (monitorErr) {
+                console.error(
+                    `[${symbol}] 檢查或撤單時發生錯誤：`,
+                    monitorErr.message
+                );
+            }
+        }, 30 * 1000);
+
+        return finalPrice;
+
+    } catch (err) {
+        console.error(
+            `[${symbol}] 限價平倉失敗：`,
+            err.message
+        );
+        return null;
+    }
+}
+
 // ===== 關卡判斷邏輯 =====
 
 async function checkSymbolStrategy(symbol) {
@@ -82,10 +564,10 @@ async function checkSymbolStrategy(symbol) {
     const lastMinute = klines[98];
     const currentMinute = klines[99];
     // 🎯 第一關：1分鐘內成交量翻倍 (k1 >= k0 * 2) 且 第 2 分鐘成交量高於第 1 分鐘 (k2 > k1)
-    const isStage1Passed = (currentMinute.volume >= lastMinute.volume * 2.5) && (lastMinute.volume > average);
+    const isStage1Passed = (currentMinute.volume >= lastMinute.volume * 2.5) && (lastMinute.volume > lastTwoMinute.volume);
 
     // 測驗漲跌幅大增
-    const startPrice = lastMinute.open;
+    const startPrice = lastTwoMinute.open;
     const endPrice = currentMinute.close;
     const changePercent = ((endPrice - startPrice) / startPrice) * 100;
     const isPriceChangeSignificant = Math.abs(changePercent) >= 0.5;
@@ -116,34 +598,7 @@ async function checkSymbolStrategy(symbol) {
 
     const direction = changePercent > 0 ? 'UP' : 'DOWN';
 
-    if (Math.abs(changePercent) >= 0.2) {
-        if (direction === 'UP') {
-            if (currentMinute.open > currentMinute.close) {
-                return;
-            }
-            if (lastMinute.open > lastMinute.close) {
-                return;
-            }
-            if (lastTwoMinute.open > lastTwoMinute.close) {
-                return;
-            }
-            if ((currentMinute.close - lastTwoMinute.open) / lastTwoMinute.open < 0.005) {
-                return;
-            }
-        } else {
-            if (currentMinute.open < currentMinute.close) {
-                return;
-            }
-            if (lastMinute.open < lastMinute.close) {
-                return;
-            }
-            if (lastTwoMinute.open < lastTwoMinute.close) {
-                return;
-            }
-            if ((currentMinute.open - lastTwoMinute.open) / lastTwoMinute.open > -0.005) {
-                return;
-            }
-        }
+    if (Math.abs(changePercent) >= 0.02) {
         // 檢查是否已經針對該時段觸發過，避免重複監控
         const taskId = `${symbol}_${currentMinute.time}`;
         if (activeMonitors.some(m => m.id === taskId)) return;
@@ -152,15 +607,21 @@ async function checkSymbolStrategy(symbol) {
         console.log(`   時間範圍: ${new Date(lastMinute.time).toLocaleTimeString()} ~ ${new Date(currentMinute.time).toLocaleTimeString()}`);
         console.log(`   方向: ${direction} | 兩分鐘幅: ${changePercent.toFixed(10)}%`);
         console.log(`   成交量變化: [${first98[0].volume.toFixed(10)}] -> [${lastMinute.volume.toFixed(10)}] -> [${currentMinute.volume.toFixed(10)}]`);
-
+        const quantity = 10000 / currentSocketPrice.get(symbol).price;
+        const finalPrice = await runTrading(symbol, currentSocketPrice.get(symbol).price, quantity, direction);
+        if (finalPrice === null) {
+            throw new Error("強制中止程式！");
+            return;
+        }
         // 加入第三關監控任務
         activeMonitors.push({
             id: taskId,
             symbol: symbol,
             startTime: Date.now(),
             direction: direction,
-            basePrice: endPrice,
-            lastThritySecondsPrice: endPrice,
+            basePrice: finalPrice,
+            quantity: quantity,
+            lastThritySecondsPrice: finalPrice,
             stayCount: 0,
             checkedIntervals: 0
         });
@@ -176,7 +637,7 @@ async function checkStageThreeTasks() {
     for (let i = activeMonitors.length - 1; i >= 0; i--) {
         const task = activeMonitors[i];
         const elapsedTime = now - task.startTime;
-        const targetInterval = (task.checkedIntervals + 1) * 0.5 * 60000; // 30秒、1分鐘
+        const targetInterval = (task.checkedIntervals + 1) * 1 * 10000; // 30秒、1分鐘
 
         if (elapsedTime >= targetInterval) {
             task.checkedIntervals += 1;
@@ -207,8 +668,7 @@ async function checkStageThreeTasks() {
                 if (pctBase >= 0.5 || pctBase <= -0.5) {
                     console.log(`⚠️ [${task.symbol}] 嚴重未達標 (累計漲跌幅 ${pctBase.toFixed(10)}%)，準備止損！`);
                 }
-                activeMonitors.splice(i, 1);
-                countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                await limitClose(task.symbol, currentPrice, task.quantity, task.direction, true, task.basePrice, i);
                 continue;
             }
 
@@ -217,21 +677,20 @@ async function checkStageThreeTasks() {
                 console.log(`⚠️ [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒未達標 0.2%，累計未達標次數: ${task.stayCount}`);
             } else {
                 if (task.direction === 'UP') {
-                    if (pct >= 3.0 && pctBase >= 2.0) {
-                        console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功遠超達標 0.2%！累計漲幅: ${pctBase.toFixed(10)}%`);
-                    } else if (pctBase >= 0.5) {
+                    if (pctBase >= 2.0) {
                         console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功遠超達標，準備平倉！累計漲幅: ${pctBase.toFixed(10)}%`);
-                        activeMonitors.splice(i, 1);
-                        countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
-
+                        await limitClose(task.symbol, currentPrice, task.quantity, task.direction, false, task.basePrice, i);
+                        continue;
+                    } else {
+                        console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功遠超達標 0.2%！累計漲幅: ${pctBase.toFixed(10)}%`);
                     }
                 } else {
-                    if (pct <= -3.0 && pctBase <= -2.0) {
-                        console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功達標 0.2%！累計跌幅: ${pctBase.toFixed(10)}%`);
-                    } else if (pctBase <= -0.5) {
+                    if (pctBase <= -2.0) {
                         console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功遠超達標，準備平倉！累計跌幅: ${pctBase.toFixed(10)}%`);
-                        activeMonitors.splice(i, 1);
-                        countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                        await limitClose(task.symbol, currentPrice, task.quantity, task.direction, false, task.basePrice, i);
+                        continue;
+                    } else {
+                        console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功達標 0.2%！累計跌幅: ${pctBase.toFixed(10)}%`);
                     }
                 }
                 task.stayCount++;
@@ -241,41 +700,36 @@ async function checkStageThreeTasks() {
 
 
             if (task.direction === 'UP') {
-                if (pctBase >= 1.0) {
+                if (pctBase >= 1.0 && task.stayCount >= 4) {
                     console.log(`🎯 [${task.symbol}] 累計漲跌幅已達 1%，任務完成，準備平倉！`);
-                    activeMonitors.splice(i, 1);
-                    countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                    await limitClose(task.symbol, currentPrice, task.quantity, task.direction, false, task.basePrice, i);
                     continue;
                 } else if (pct > pctBase) {
                     console.log(`⚠️ [${task.symbol}] 當前漲幅 ${pct.toFixed(10)}% 準備開始反向 ${pctBase.toFixed(10)}%，準備平倉！`);
-                    activeMonitors.splice(i, 1);
-                    countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                    await limitClose(task.symbol, currentPrice, task.quantity, task.direction, true, task.basePrice, i);
                     continue;
                 }
             } else {
-                if (pctBase <= -1.0) {
+                if (pctBase <= -1.0 && task.stayCount >= 4) {
                     console.log(`🎯 [${task.symbol}] 累計漲跌幅已達 -1%，任務完成，準備平倉！`);
-                    activeMonitors.splice(i, 1);
-                    countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                    await limitClose(task.symbol, currentPrice, task.quantity, task.direction, false, task.basePrice, i);
                     continue;
                 } else if (pct < pctBase) {
                     console.log(`⚠️ [${task.symbol}] 當前跌幅 ${pct.toFixed(10)}% 準備開始反向 ${pctBase.toFixed(10)}%，準備平倉！`);
-                    activeMonitors.splice(i, 1);
-                    countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                    await limitClose(task.symbol, currentPrice, task.quantity, task.direction, true, task.basePrice, i);
                     continue;
                 }
             }
 
 
 
-            if (task.checkedIntervals > 10) {
-                if (pctBase < 1.0 && pctBase > -1.0) {
+            if (task.checkedIntervals > 30) {
+                if (pctBase <= 1.0 && pctBase >= -1.0) {
                     console.log(`❌ [${task.symbol}] 未達標，準備平！累計漲跌幅: ${pctBase.toFixed(10)}%`);
                 } else {
                     console.log(`🎉 [${task.symbol}] 任務完成，準備平倉！`);
                 }
-                activeMonitors.splice(i, 1);
-                countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time]);
+                await limitClose(task.symbol, currentPrice, task.quantity, task.direction, false, task.basePrice, i);
                 continue;
             }
             task.lastThritySecondsPrice = currentPrice; // 更新上一次的價格
@@ -290,7 +744,7 @@ function startPrecisionScheduler() {
     const millis = now.getMilliseconds();
 
     // 計算距離「下一個 00 秒」還有多少毫秒
-    let delay = (60 - seconds) % 60 * 1000 - millis;
+    let delay = (62 - seconds) % 60 * 1000 - millis;
     if (delay <= 0) delay += 60000;
 
     const nextTriggerTime = new Date(Date.now() + delay).toLocaleTimeString();
@@ -361,3 +815,47 @@ function startPrecisionScheduler() {
 }
 
 startPrecisionScheduler();
+
+// async function test() {
+//     const url = 'wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade';
+//     const ws = new WebSocket(url);
+//     ws.on('open', () => {
+//         console.log('Successfully connected to Binance WebSocket!');
+//     });
+//     // 接收到 Binance 傳來的訊息時觸發
+//     ws.on('message', (data) => {
+//         try {
+//             const parsedData = JSON.parse(data);
+
+//             // Combined Stream 的資料格式外層會包含 "stream" 與 "data"
+//             const streamName = parsedData.stream;
+//             const tradeData = parsedData.data;
+
+//             // 更新最新價格
+//             currentSocketPrice.set(tradeData.s, { price: parseFloat(tradeData.p), time: tradeData.T });
+//         } catch (error) {
+//             console.error('Error parsing JSON:', error);
+//         }
+//     });
+
+//     // 發生錯誤時觸發
+//     ws.on('error', (error) => {
+//         console.error('WebSocket Error:', error);
+//     });
+
+//     // 連線關閉時觸發
+//     ws.on('close', (code, reason) => {
+//         console.log(`WebSocket connection closed. Code: ${code}, Reason: ${reason}`);
+//     });
+
+//     setTimeout(async () => {
+//         console.log(currentSocketPrice.get('BTCUSDT'))
+//         const finalPrice = await runTrading('BTCUSDT', currentSocketPrice.get('BTCUSDT').price, 0.001, 'UP');
+//         setTimeout(async () => {
+//             const limitClosePrice = await limitClose('BTCUSDT', currentSocketPrice.get('BTCUSDT').price, 0.001, 'UP');
+//         }, 120000)
+//     }, 10000)
+
+// }
+
+// test()

@@ -152,13 +152,13 @@ async function checkSymbolStrategy(symbol) {
     const isPriceStable = maxGainRatioIn10m <= 0.01 && maxGainRatioIn10m >= -0.01;
 
     if (!isStage1Passed && !isPriceChangeSignificant) return;
-    // 🎯 第二關：前兩分鐘內 (k1.open 到 k2.close) 漲跌幅 >= 0.2%
+    // 🎯 第二關：前兩分鐘內 (k1.open 到 k2.close) 漲跌幅 >= 0.1%
     console.log(`\n${new Date(currentMinute.time).toLocaleTimeString()} [${symbol}] 價格：${currentMinute.close.toFixed(10)} 第一關檢測: k1.volume=${lastMinute.volume.toFixed(10)} | k2.volume=${currentMinute.volume.toFixed(10)}  \n前一分鐘買入額=${lastMinute.buyQuoteVolume.toFixed(10)} | 現在買入額=${currentMinute.buyQuoteVolume.toFixed(10)} 前一分鐘比例${lastMinute.buyQuoteVolume / lastMinute.sellQuoteVolume} \n前一分鐘賣出額=${lastMinute.sellQuoteVolume.toFixed(10)} | 現在賣出額=${currentMinute.sellQuoteVolume.toFixed(10)} 現在比例${currentMinute.buyQuoteVolume / currentMinute.sellQuoteVolume} \n平均量=${average.toFixed(10)} | 是否通過: ${isStage1Passed ? '✅' : '❌'} |  是否通過大幅: ${isPriceChangeSignificant ? '✅' : '❌'}`);
 
 
     const direction = changePercent > 0 ? 'UP' : 'DOWN';
 
-    if (Math.abs(changePercent) >= 0.2) {
+    if (Math.abs(changePercent) >= 0.1) {
         if (direction === 'UP') {
             if (currentMinute.open > currentMinute.close) {
                 return;
@@ -319,7 +319,7 @@ function startPrecisionScheduler() {
 
     (async () => {
         await Promise.all(SYMBOLS.map(symbol => {
-            const data = getKlinesFetchData(symbol, '1m', 1787601600000, 1787634480000);
+            const data = getKlinesFetchData(symbol, '1m', 1787635260000, 1787668980000);
             dataMap.set(symbol, data);
             return data;
         }))
@@ -374,6 +374,7 @@ function startPrecisionScheduler() {
                             console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功遠超達標，準備平倉！累計漲幅: ${pctBase.toFixed(10)}%`);
                             countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time])
                             activeMonitors.splice(i, 1);
+                            continue;
                         }
                     } else {
                         if (pct <= -3.0 && pctBase <= -2.0) {
@@ -382,6 +383,7 @@ function startPrecisionScheduler() {
                             console.log(`🎯 [${task.symbol}] 第 ${task.checkedIntervals} 個 30 秒成功遠超達標，準備平倉！累計跌幅: ${pctBase.toFixed(10)}%`);
                             countPercent.push([task.symbol, task.direction, (task.direction === 'UP' ? 1 : -1) * pctBase.toFixed(10), task.basePrice, currentPrice, currentKlines.time])
                             activeMonitors.splice(i, 1);
+                            continue;
                         }
                     }
                     task.stayCount++;
