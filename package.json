@@ -4,17 +4,19 @@
   "description": "",
   "license": "ISC",
   "author": "",
-  "type": "commonjs",
+  "type": "module",
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "@binance/futures-connector": "^0.1.7",
+    "@google/genai": "^2.21.0",
     "axios": "^1.19.0",
     "binance": "^3.6.3",
     "dotenv": "^17.4.2",
     "fast-csv": "^5.0.7",
+    "node-telegram-bot-api": "^2.1.0",
     "ws": "^8.21.3"
   }
 }
