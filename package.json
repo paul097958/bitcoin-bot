@@ -15,6 +15,7 @@
     "axios": "^1.19.0",
     "binance": "^3.6.3",
     "dotenv": "^17.4.2",
+    "eulerpool": "^1.0.0",
     "fast-csv": "^5.0.7",
     "node-telegram-bot-api": "^2.1.0",
     "ws": "^8.21.3"
