@@ -31,6 +31,8 @@
     // "noUnusedParameters": true,
     // "noFallthroughCasesInSwitch": true,
     // "noPropertyAccessFromIndexSignature": true,
+    "resolveJsonModule": true,    // 允許 import json 檔案
+    "esModuleInterop": true,
 
     // Recommended Options
     "strict": true,

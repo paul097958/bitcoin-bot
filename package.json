@@ -14,9 +14,12 @@
     "@google/genai": "^2.21.0",
     "axios": "^1.19.0",
     "binance": "^3.6.3",
+    "discord.js": "^14.27.0",
     "dotenv": "^17.4.2",
     "eulerpool": "^1.0.0",
     "fast-csv": "^5.0.7",
+    "json-server": "^1.0.0-beta.15",
+    "node-cron": "^4.6.0",
     "node-telegram-bot-api": "^2.1.0",
     "ws": "^8.21.3"
   }

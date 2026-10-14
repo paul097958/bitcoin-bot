@@ -3,12 +3,9 @@ import { USDMClient } from 'binance';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-
-// 取得當前檔案所在的資料夾路徑（相容 ES Modules）
+import SYMBOLS from './data/symbols.json' with { type: 'json' };
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// 強制指定去專案根目錄（上一層）尋找 .env
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
 // 初始化 Google GenAI
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
@@ -23,14 +20,6 @@ const client = new USDMClient({
 });
 
 const BASE_URL = 'https://fapi.binance.com';
-
-const SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
-    'DOGEUSDT', 'ADAUSDT', 'AVAXUSDT', 'SUIUSDT', 'LINKUSDT',
-    'NEARUSDT', 'APTUSDT', 'FETUSDT', 'WIFUSDT',
-    'ORDIUSDT', 'LDOUSDT', 'FILUSDT', 'LTCUSDT', 'BCHUSDT',
-    'TAOUSDT', 'ZECUSDT', 'UNIUSDT', 'BATUSDT'
-] as const;
 
 type SymbolType = typeof SYMBOLS[number];
 
@@ -101,23 +90,9 @@ function getSymbolFilters(symbol: string): SymbolFilter {
         case 'BNBUSDT': return { tickSize: 0.01, stepSize: 0.01 };
         case 'XRPUSDT': return { tickSize: 0.0001, stepSize: 0.1 };
         case 'DOGEUSDT': return { tickSize: 0.00001, stepSize: 1 };
-        case 'ADAUSDT': return { tickSize: 0.0001, stepSize: 1 };
-        case 'AVAXUSDT': return { tickSize: 0.001, stepSize: 1 };
-        case 'SUIUSDT': return { tickSize: 0.0001, stepSize: 0.1 };
-        case 'LINKUSDT': return { tickSize: 0.001, stepSize: 0.01 };
-        case 'NEARUSDT': return { tickSize: 0.001, stepSize: 1 };
-        case 'APTUSDT': return { tickSize: 0.001, stepSize: 0.1 };
         case 'TAOUSDT': return { tickSize: 0.001, stepSize: 0.01 };
         case 'ZECUSDT': return { tickSize: 0.001, stepSize: 0.01 };
         case 'UNIUSDT': return { tickSize: 0.001, stepSize: 1 };
-        case 'BATUSDT': return { tickSize: 0.1, stepSize: 0.000010 };
-        case 'FETUSDT': return { tickSize: 0.0001, stepSize: 1 };
-        case 'WIFUSDT': return { tickSize: 0.0001, stepSize: 1 };
-        case 'ORDIUSDT': return { tickSize: 0.001, stepSize: 0.1 };
-        case 'LDOUSDT': return { tickSize: 0.001, stepSize: 1 };
-        case 'FILUSDT': return { tickSize: 0.001, stepSize: 0.1 };
-        case 'LTCUSDT': return { tickSize: 0.01, stepSize: 0.001 };
-        case 'BCHUSDT': return { tickSize: 0.01, stepSize: 0.001 };
         default:
             throw new Error(`未知的交易對: ${symbol}`);
     }
