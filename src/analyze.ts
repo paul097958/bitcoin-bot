@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
 import SYMBOLS from './data/symbols.json' with { type: 'json' };
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, Type } from '@google/genai';
 
 // 初始化 Gemini Client (確保你的 .env 有 GEMINI_API_KEY)
 
@@ -51,6 +51,25 @@ interface TopAccountRatioData {
     shortAccount: number;  // 空頭帳戶比例
     longShortRatio: number; // 多空人數比 (Long/Short Ratio)
     timestamp: number;     // 時間戳記
+}
+
+export interface TradingSignal {
+    symbol: string;
+    action: 'NO_ACTION' | 'OPEN_NEW';
+    side: 'BUY' | 'SELL' | 'NONE';
+    strength: '強' | '中' | '弱';
+    bias: '偏多' | '偏空' | '盤整';
+    supports: number[];
+    resistances: number[];
+    entryPrice: number;
+    dcaPrice: number;       // 補倉價位
+    stopLossPrice: number;
+    takeProfitPrices: {
+        tp1: number; // 70%
+        tp2: number; // 30%
+        tp3: number; // 10%
+    };
+    reason: string;
 }
 
 // --- 1. 取得資金費率 ---
@@ -373,80 +392,145 @@ async function main(targetSymbol: string): Promise<string> {
     return lines.join('\n');
 }
 
-async function analyzeCoinsWithGemini(marketReportsText: string): Promise<string> {
+async function analyzeCoinsWithGemini(marketReportsText: string): Promise<TradingSignal[]> {
     const prompt = `
 你是一位專業的加密貨幣量化交易與技術分析專家。
-以下是多個幣種的市場即時數據（包含關鍵價位、訂單簿、K線、持倉量、資金費率）以及總經背景。
+以下是多個幣種的市場即時數據（包含合約現價、關鍵價位、訂單簿、K線、大戶多空比、持倉量、資金費率）以及總經背景。
+請使用費波那契回撤，來評估各幣種的支撐與阻力位，並分析多空趨勢。
 
-請針對每一個幣種進行專業分析，並**嚴格依照**以下的固定格式來輸出每一個幣種的分析結果。如果某個幣種沒有明確行情，請在建議建倉位置填寫「無明確行情不需」，請使用markdown語法美化。
+請針對每一個輸入的幣種進行專業分析，並選出「最優投資組合」（最多選兩個最具明確多空行情的幣種進行建倉，其餘可給予 NO_ACTION）。
 
-【 輸出格式範本  】
+請嚴格依照下方的 JSON Schema 格式回傳一個陣列（Array），包含所有分析的幣種資料。
 
-總結：說明整體市場的方向與重大事件。
-
---------------------------------------------------
-[幣種名稱] 🔴偏空 / 🟢偏多 / ⚪盤整 | 力度 強 / 中 / 弱
-支撐 [支撐位1] [支撐位2] [支撐位3]
-阻力 [阻力位1] [阻力位2] [阻力位3]
-
-簡短說明：[請用簡短精鍊的文字分析當前盤勢、多空力量與資金費率/持倉量變化]
-
-建議建倉位置 (如果沒有明確行情請填寫「無明確行情不需」)
-方向：[多 / 空]
-位置：[進場價位]
-補倉：[補倉價位]
-止損：[止損價位]
-止盈：TP1(xx%會達到) [價位] | TP2(xx%會達到) [價位] | TP3(xx%會達到) [價位]
---------------------------------------------------
-
---------------------------------------------------
-[幣種名稱] 🔴偏空 / 🟢偏多 / ⚪盤整 | 力度 強 / 中 / 弱
-支撐 [支撐位1] [支撐位2] [支撐位3]
-阻力 [阻力位1] [阻力位2] [阻力位3]
-
-簡短說明：[請用簡短精鍊的文字分析當前盤勢、多空力量與資金費率/持倉量變化]
-
-建議建倉位置 (如果沒有明確行情請填寫「無明確行情不需」)
-方向：[多 / 空]
-位置：[進場價位]
-補倉：[補倉價位]
-止損：[止損價位]
-止盈：TP1(xx%會達到) [價位] | TP2(xx%會達到) [價位] | TP3(xx%會達到) [價位]
---------------------------------------------------
-
-最優投資組合(風險最低、方向最明確)：最多選兩個
-
-
-以下是原始市場數據(時間都是UTC+8)：
-現在時間為：${new Date().toLocaleString()}
-${marketReportsText}
+以下是原始市場數據（時間都是 UTC+8）：
+現在時間為：${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}${marketReportsText}
 `;
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash', // 速度快且適合長文本分析的模型
+            model: 'gemini-2.5-flash',
             contents: prompt,
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: Type.ARRAY,
+                    description: '多個幣種的市場分析與量化交易訊號清單',
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            symbol: { type: Type.STRING, description: '幣種代號，例如 BTCUSDT' },
+                            action: {
+                                type: Type.STRING,
+                                enum: ['NO_ACTION', 'OPEN_NEW'],
+                                description: '交易動作指令'
+                            },
+                            side: { type: Type.STRING, enum: ['BUY', 'SELL', 'NONE'], description: '買入(多)或賣出(空)' },
+                            strength: { type: Type.STRING, enum: ['強', '中', '弱'] },
+                            bias: { type: Type.STRING, enum: ['偏多', '偏空', '盤整'] },
+                            supports: {
+                                type: Type.ARRAY,
+                                items: { type: Type.NUMBER },
+                                description: '三個主要支撐位'
+                            },
+                            resistances: {
+                                type: Type.ARRAY,
+                                items: { type: Type.NUMBER },
+                                description: '三個主要阻力位'
+                            },
+                            entryPrice: { type: Type.NUMBER, description: '建議進場價位，若無則填 0' },
+                            dcaPrice: { type: Type.NUMBER, description: '建議補倉價位，若無則填 0' },
+                            stopLossPrice: { type: Type.NUMBER, description: '止損價位，若無則填 0' },
+                            takeProfitPrices: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    tp1: { type: Type.NUMBER, description: 'TP1 (70%機率達到)' },
+                                    tp2: { type: Type.NUMBER, description: 'TP2 (30%機率達到)' },
+                                    tp3: { type: Type.NUMBER, description: 'TP3 (10%機率達到)' }
+                                },
+                                required: ['tp1', 'tp2', 'tp3']
+                            },
+                            reason: { type: Type.STRING, description: '分析行情，字數限制在 500 字以內，必須提示需觀察的價位，例如，跌不破80000將會再次拉漲。BTCUSDT的建議須包含全盤的分析' }
+                        },
+                        required: [
+                            'symbol', 'action', 'side', 'strength', 'bias', 
+                            'supports', 'resistances', 'entryPrice', 'dcaPrice', 
+                            'stopLossPrice', 'takeProfitPrices', 'reason'
+                        ]
+                    }
+                }
+            }
         });
 
-        return response.text || '無法取得 AI 分析結果';
+        const rawText = response.text || '[]';
+        const signals: TradingSignal[] = JSON.parse(rawText);
+        return signals;
     } catch (error: any) {
-        console.error('❌ Gemini 分析失敗：', error.message || error);
-        return '分析過程發生錯誤';
+        console.error('❌ Gemini 分析失敗或 JSON 解析錯誤：', error.message || error);
+        return [];
     }
 }
 
-export default async function runMarketAnalysisPipeline() {
+function formatSignalsToMarkdown(signals: TradingSignal[]): string[] {
+    const messages: string[] = [];
+    const lines: string[] = [];
+
+    // 1. 標題區塊（獨立成第一則訊息，或作為開頭）
+    lines.push(`\n\n🚀 **加密貨幣量化與 AI 智能盤勢分析報告**`);
+    lines.push(`⏰ \`${new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' })}\``);
+    lines.push(`\n\n`); // 空行留白
+    
+    messages.push(lines.join('\n'));
+
+    // 2. 每個幣種獨立一個卡片（自成一個訊息，完美解決 2000 字元限制）
+    signals.forEach((sig) => {
+        const coinLines: string[] = [];
+        const emoji = sig.bias === '偏多' ? '🟢' : sig.bias === '偏空' ? '🔴' : '⚪';
+        
+        coinLines.push(`\n\n### ${sig.symbol} ${emoji}${sig.bias}  |  力度：**${sig.strength}**`);
+        coinLines.push(`🛡️ 支撐：\`${sig.supports.join(' / ')}\``);
+        coinLines.push(`⚔️ 阻力：\`${sig.resistances.join(' / ')}\``);
+        coinLines.push(``);
+        coinLines.push(`> 📝 **盤勢解讀**：${sig.reason}`);
+        coinLines.push(``);
+        
+        if (sig.action === 'OPEN_NEW') {
+            coinLines.push(`🎯 **建議建倉與風控**`);
+            coinLines.push(`• 方向：**${sig.side === 'BUY' ? '🟢 多 (BUY)' : '🔴 空 (SELL)'}**`);
+            coinLines.push(`• 進場價：\`${sig.entryPrice}\``);
+            coinLines.push(`• 補倉價：\`${sig.dcaPrice}\``);
+            coinLines.push(`• 止損價：\`${sig.stopLossPrice}\``);
+            coinLines.push(`• 止盈目標：TP1 \`${sig.takeProfitPrices.tp1}\` | TP2 \`${sig.takeProfitPrices.tp2}\` | TP3 \`${sig.takeProfitPrices.tp3}\``);
+        } else {
+            coinLines.push(`📌 建議：*無明確行情，暫時觀望 (NO_ACTION)*`);
+        }
+
+        messages.push(coinLines.join('\n'));
+    });
+
+    return messages; // 回傳 string[] 陣列
+}
+
+export async function runMarketAnalysisPipeline() {
     let allReports = '';
 
     console.log('🚀 開始收集各幣種市場數據...');
     for (const symbol of SYMBOLS) {
         console.log(`正在抓取 ${symbol}...`);
-        const reportText = await main(symbol);
+        const reportText = await main(symbol); // 你的抓取資料主函式
         allReports += reportText + '\n\n';
     }
-    console.log('🤖 數據收集完畢，正在傳送給 Gemini AI 進行專業分析...\n');
-    const finalAiAnalysis = await analyzeCoinsWithGemini(allReports);
 
-    return finalAiAnalysis;
+    console.log('🤖 數據收集完畢，正在傳送給 Gemini AI 進行結構化分析...\n');
+    
+    // 1. 取得結構化 JSON 訊號
+    const signals: TradingSignal[] = await analyzeCoinsWithGemini(allReports);
+
+    // 2. 將 JSON 轉譯成 Discord 專用的美觀 Markdown 報告
+    const messageChunks = formatSignalsToMarkdown(signals);
+
+    // 回傳物件，讓你既可以發送 Discord，又可以拿 signals 去跑交易所下單 API
+    return {
+        messageChunks,
+        signals
+    };
 }
-

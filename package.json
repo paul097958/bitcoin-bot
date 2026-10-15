@@ -18,9 +18,9 @@
     "dotenv": "^17.4.2",
     "eulerpool": "^1.0.0",
     "fast-csv": "^5.0.7",
-    "json-server": "^1.0.0-beta.15",
+    "firebase-admin": "^14.5.0",
     "node-cron": "^4.6.0",
     "node-telegram-bot-api": "^2.1.0",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   }
 }
