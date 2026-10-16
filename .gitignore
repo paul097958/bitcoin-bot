@@ -5,3 +5,5 @@ package-lock.json
 .env
 dist
 services.json
+.next
+next-env.d.ts

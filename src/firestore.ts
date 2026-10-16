@@ -1,6 +1,7 @@
 import type { MarketReportData } from './analyze.js';
 import type { TradingSignal } from './analyze.js';
 import { cert, initializeApp } from 'firebase-admin/app';
+import { fetchCurrentPrice } from './analyze.js';
 import serviceAccount from '../services.json' with { type: 'json' };
 initializeApp({
     credential: cert(serviceAccount as any),
@@ -21,6 +22,7 @@ export interface TradePosition {
     reason: string;
     status: 'OPEN' | 'CLOSED';
     openedAt: Timestamp;
+    closePrice: number | null;
     closedAt: Timestamp | null;
     closeReason?: string;
 }
@@ -97,7 +99,8 @@ export async function saveSignalsAndReportsToFirestore(signals: TradingSignal[],
                     reason: signal.reason,
                     status: 'OPEN', // 標記目前為持倉中
                     openedAt: Timestamp.fromDate(batchTimestamp),
-                    closedAt: null
+                    closedAt: null,
+                    closePrice: null // 初始化平倉價為 null
                 });
                 console.log(`📈 [持倉追蹤] 記錄新開倉單：${signal.symbol} (${signal.side})`);
 
@@ -111,12 +114,27 @@ export async function saveSignalsAndReportsToFirestore(signals: TradingSignal[],
                 // 確保真的有找到文件才進行操作
                 if (!querySnapshot.empty && querySnapshot.docs[0]) {
                     const openDoc = querySnapshot.docs[0];
+
+                    // 取得當前平倉價格
+                    const currentClosePrice = (await fetchCurrentPrice(signal.symbol)) || 0;
+                    let insertPrice = currentClosePrice;
+                    if(signal.side === 'BUY'){
+                        if(signal.stopLossPrice > currentClosePrice){
+                            insertPrice = signal.stopLossPrice
+                        }
+                    }else if(signal.side === 'SELL'){
+                        if(signal.stopLossPrice < currentClosePrice){
+                            insertPrice = signal.stopLossPrice
+                        }
+                    }
+                    
                     await openDoc.ref.update({
                         status: 'CLOSED',
                         closedAt: Timestamp.fromDate(batchTimestamp),
-                        closeReason: signal.reason
+                        closeReason: signal.reason,
+                        closePrice: insertPrice
                     });
-                    console.log(`📉 [持倉追蹤] 成功更新平倉單：${signal.symbol}，已填入平倉時間`);
+                    console.log(`📉 [持倉追蹤] 成功更新平倉單：${signal.symbol}，平倉價: ${currentClosePrice}，已填入平倉時間`);
                 } else {
                     console.warn(`⚠️ [持倉追蹤] 收到 ${signal.symbol} 的平倉訊號，但在資料庫中找不到對應的 OPEN 紀錄。`);
                 }

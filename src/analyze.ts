@@ -216,7 +216,7 @@ async function getKlines(symbol: string, interval: string = '1m', limit: number 
     }
 }
 
-async function fetchCurrentPrice(symbol: string = 'BTCUSDT'): Promise<number | null> {
+export async function fetchCurrentPrice(symbol: string = 'BTCUSDT'): Promise<number | null> {
     try {
         // 取得單一合約的最新價格 (Ticker Price)
         const response: any = await client.getSymbolPriceTicker({
