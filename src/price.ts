@@ -19,5 +19,5 @@ function checkTradingOpportunity(symbol: string) {
 
 // 隔 3 秒測試抓取一次
 setInterval(() => {
-    checkTradingOpportunity('BTCUSDT');
+    SYMBOLS.forEach(symbol => checkTradingOpportunity(symbol));
 }, 3000);

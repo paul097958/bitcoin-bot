@@ -14,7 +14,7 @@ export class PriceManager {
     public connect() {
         // 修正 1：加上 /public/stream 完整路徑
         const streams = this.symbols.map(s => `${s}@ticker`).join('/');
-        const wsUrl = `wss://fstream.binance.com/public/stream?streams=${streams}`;
+        const wsUrl = `wss://dstream.binance.com/stream?streams=${streams}`;
 
         console.log(`🔌 正在啟動價格即時更新服務...`);
         this.ws = new WebSocket(wsUrl);
