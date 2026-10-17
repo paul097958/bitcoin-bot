@@ -110,7 +110,7 @@ export default function PositionCard({ position }: PositionCardProps) {
             </div>
 
             {/* 解決 reason 文字溢出：使用 break-words 與 max-h 捲軸或展開 */}
-            <div className="text-xs bg-gray-950/80 p-3 rounded border border-gray-800 text-gray-300 break-words whitespace-pre-wrap max-h-28 overflow-y-auto">
+            <div className="text-xs text-gray-300 bg-gray-950/80 p-3 rounded-lg border border-gray-800/60 break-words whitespace-pre-wrap leading-relaxed">
                 💡 <span className="font-semibold text-gray-400">研判理由：</span>{position.reason}
             </div>
         </div>

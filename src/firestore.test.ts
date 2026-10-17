@@ -1,4 +1,5 @@
-import type { TradingSignal, MarketReportData } from './analyze.js';
+import type { TradingSignal, MarketReportData  } from './analyze.js';
+import {  fetchCurrentPrice } from './analyze.js'
 import { saveSignalsAndReportsToFirestore, getLatestMarketReport, getOpenPositions } from './firestore.js';
 // 1. 測試用的 TradingSignal 資料
 const mockSignals: TradingSignal[] = [
@@ -253,7 +254,8 @@ const mockReportsData2: MarketReportData[] = [
     }
 ];
 
-await saveSignalsAndReportsToFirestore(mockSignals2, mockReportsData2);
+// await saveSignalsAndReportsToFirestore(mockSignals2, mockReportsData2);
 
-console.log(await getLatestMarketReport());
-console.log(await getOpenPositions());
+// console.log(await getLatestMarketReport());
+// console.log(await getOpenPositions());
+console.log(await fetchCurrentPrice("ZECUSDT"));

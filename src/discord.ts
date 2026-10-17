@@ -33,21 +33,21 @@ async function sendAnalysisReport(headerTitle: string) {
 client.once('ready', async () => {
     console.log(`機器人已成功登入：${client.user?.tag}`);
 
-    await sendAnalysisReport('【趨勢分析】');
-    // // 1. 早上 08:00
-    // cron.schedule('0 8 * * *', async () => {
-    //     await sendAnalysisReport('🌅 【早盤趨勢分析】');
-    // });
+    // await sendAnalysisReport('【趨勢分析】');
+    // 1. 早上 08:00
+    cron.schedule('0 8 * * *', async () => {
+        await sendAnalysisReport('🌅 【早盤趨勢分析】');
+    });
 
-    // // 2. 下午 16:00
-    // cron.schedule('0 16 * * *', async () => {
-    //     await sendAnalysisReport('☀️ 【歐盤盤中分析】');
-    // });
+    // 2. 下午 16:00
+    cron.schedule('0 16 * * *', async () => {
+        await sendAnalysisReport('☀️ 【歐盤盤中分析】');
+    });
 
-    // // 3. 晚上 20:00
-    // cron.schedule('0 20 * * *', async () => {
-    //     await sendAnalysisReport('🌙 【美盤黃金時段分析】');
-    // });
+    // 3. 晚上 20:00
+    cron.schedule('0 20 * * *', async () => {
+        await sendAnalysisReport('🌙 【美盤黃金時段分析】');
+    });
 });
 
 

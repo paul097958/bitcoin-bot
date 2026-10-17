@@ -7,7 +7,7 @@ initializeApp({
     credential: cert(serviceAccount as any),
 });
 import { getFirestore, Timestamp } from 'firebase-admin/firestore';
-const db = getFirestore();
+export const db = getFirestore();
 
 export interface TradePosition {
     symbol: string;
@@ -117,6 +117,9 @@ export async function saveSignalsAndReportsToFirestore(signals: TradingSignal[],
 
                     // 取得當前平倉價格
                     const currentClosePrice = (await fetchCurrentPrice(signal.symbol)) || 0;
+                    if(currentClosePrice === null){
+                        console.log("無法取得價格")
+                    }
                     let insertPrice = currentClosePrice;
                     if(signal.side === 'BUY'){
                         if(signal.stopLossPrice > currentClosePrice){
