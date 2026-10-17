@@ -39,13 +39,33 @@ client.once('ready', async () => {
         await sendAnalysisReport('🌅 【早盤趨勢分析】');
     });
 
+    cron.schedule('0 10 * * *', async () => {
+        await sendAnalysisReport('⌛ 【十點趨勢分析】');
+    });
+
+    cron.schedule('0 12 * * *', async () => {
+        await sendAnalysisReport('⛅ 【午盤趨勢分析】');
+    });
+
+    cron.schedule('0 14 * * *', async () => {
+        await sendAnalysisReport('🍫 【下午盤趨勢分析】');
+    });
+
     // 2. 下午 16:00
     cron.schedule('0 16 * * *', async () => {
         await sendAnalysisReport('☀️ 【歐盤盤中分析】');
     });
 
+    cron.schedule('0 18 * * *', async () => {
+        await sendAnalysisReport('🌕 【六點盤中分析】');
+    });
+
     // 3. 晚上 20:00
     cron.schedule('0 20 * * *', async () => {
+        await sendAnalysisReport('🌙 【美盤黃金時段分析】');
+    });
+
+    cron.schedule('0 22 * * *', async () => {
         await sendAnalysisReport('🌙 【美盤黃金時段分析】');
     });
 });

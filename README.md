@@ -1,83 +1,177 @@
-# 🤖 Gemini AI Crypto Trading Bot
+# 🤖 Crypto AI Quantitative Trading Bot (加密貨幣 AI 自動化量化交易機器人)
 
-這是一個基於 **Node.js (TypeScript)** 與 **Google GenAI (Gemini SDK)** 的加密貨幣合約自動交易機器人。它結合了 Binance USD-M (USDT 本位合約) 的市場數據與 Gemini 的強大推理能力，依據多週期 K 線數據（4H、1H、1M）來自動化執行市場分析、風控管理與掛單決策。
+本專案是一個基於 **TypeScript** 與 **Google Gemini AI** 所打造的加密貨幣自動化量化交易與盤勢分析系統。系統能定時透過 Binance USDM 永續合約 API 抓取多維度市場數據、大戶多空比、歷史持倉量（OI）、資金費率、訂單簿，並結合美國聯準會（FRED）總經數據（CPI、PCE、非農就業人口）交由 Google Gemini AI 進行深度量化分析。
 
----
-
-## 🌟 主要功能特色
-
-* **多週期智慧分析**：同時抓取 **4小時 (4H)**、**1小時 (1H)** 與 **1分鐘 (1M)** 的 K 線數據，交由 Gemini AI 進行綜合趨勢與關鍵位階判斷。
-* **紀律化交易風格**：內建冷酷紀律型人格 Prompt 設定，嚴格執行右側確認、關鍵支撐/阻力位守候，杜絕 FOMO 與情緒化操作。
-* **自動化訂單與風控執行**：
-* 支援限價開倉 (`LIMIT`)、市價平倉 (`MARKET`)。
-* 自動綁定止損 (`STOP_MARKET`) 與止盈 (`TAKE_PROFIT_MARKET`) 條件單。
-
-
-* **精準數值校正**：內建 Binance 交易對精度（`tickSize` 與 `stepSize`）自動校正機制，防止因小數點位數錯誤導致的 API 拒絕。
-* **定期排程監控**：支援定時循環任務，自動對多個指定交易對進行輪詢監控與動態管理。
+系統產出交易訊號後會自動推送到 **Discord** 頻道，同時將報告與部位狀態同步至 **Firebase Firestore** 進行雲端管理。此外，內建 **WebSocket 即時價格管理器** 與 **自動化風控持倉監控中心**，能以極高效能進行 24 小時無間斷的止盈（TP）與止損（SL）全自動風控。
 
 ---
 
-## 🛠️ 專案架構與依賴
+## 🛠 專案模組架構與核心邏輯
 
-### 核心依賴
+專案採用高內聚、低耦合的設計，各模組職責劃分如下：
 
-* `@google/genai`：Google 官方最新的 Gemini API SDK。
-* `binance`：Binance API 客戶端（使用 `USDMClient` 處理合約操作）。
-* `dotenv`：環境變數管理。
+### 1. `analyze.ts` (資料擷取、結構化處理與 AI 分析核心)
 
-### 支援的交易對
+* **資料擷取 (`mergeMarketData`)**：平行或依序呼叫 Binance SDK 取得 K 線（預設 4h）、現價、訂單簿、資金費率、持倉量與大戶多空比；針對 `BTCUSDT` 額外呼叫 FRED API 獲取總經指標。
+* **職責分離（資料與視圖解耦）**：`main` 函式（或 `mergeMarketData`）專門負責抓取並回傳純粹的結構化物件 (`MarketReportData`)。
+* **字串合成函式 (`buildMarketReportText`)**：將結構化資料動態拼裝成格式化報告文字。
+* **歷史報告解析 (`formatLatestMarketReportToText`)**：將 Firestore 中最新快取的市場報告與訊號資料轉換為易讀的排版文字。
+* **AI 智慧決策 (`analyzeCoinsWithGemini`)**：將市場報告與歷史持倉結合，透過 `gemini-2.5-flash` 與指定的 JSON Schema 回傳結構化交易訊號 (`TradingSignal[]`)，包含 `OPEN_NEW`（建倉）、`CLOSE_POSITION`（平倉）或 `NO_ACTION`（觀望）。
 
-程式碼內建預設監控陣列與精度過濾對照表，目前示範設定包含 `UNIUSDT`、`BATUSDT` 等多種主流及潛力幣種。
+### 2. `discord.ts` (多時段定時排程與通知)
+
+* 使用 `node-cron` 建立全天候自動排程（涵蓋早盤、午盤、歐盤及美盤黃金時段）。
+* 自動呼叫分析管線，將過長的訊息自動切割成多個區塊（Chunk），突破 Discord 2000 字元限制，以優美的 Markdown 卡片發送。
+
+### 3. `firestore.ts` (雲端資料庫與持倉生命週期追蹤)
+
+* **市場報告紀錄 (`market_reports`)**：依據時間戳記建立唯一文件 ID（例如 `2026-10-15_03-01-00`），完整保存每次分析的 AI 訊號與原始市場數據。
+* **智能部位追蹤 (`trade_positions`)**：
+* **`OPEN_NEW` 邏輯**：系統會自動檢查該幣種是否已有狀態為 `OPEN` 的持倉，防止重複開倉；若無則建立新紀錄。
+* **`CLOSE_POSITION` 邏輯**：當收到平倉訊號時，自動尋找對應幣種的 `OPEN` 紀錄，更新其狀態為 `CLOSED`，並寫入平倉時間與平倉理由。
+
+
+
+### 4. `websocket.ts` (即時價格管理器 `PriceManager`)
+
+* **訂閱機制**：接收自訂的幣種清單（如 `SYMBOLS`），自動轉為小寫並透過 Binance USDM WebSocket 端點（`wss://[dstream.binance.com/stream](https://dstream.binance.com/stream)`）進行多幣種 `@ticker` 串流訂線。
+* **記憶體儲存 (`Map`)**：將每個幣種的最新成交價（`lastPrice`）、買一價（`bidPrice`）、賣一價（`askPrice`）與更新時間戳記快取在記憶體的 `Map` 中。
+* **自動重連**：內建斷線重連機制（5秒後自動重新連線）。
+
+### 5. `price.ts` (自動化風控與部位監控中心)
+
+* **雙層快取與低成本設計**：
+* **行情來源**：每秒直接從 `PriceManager` 記憶體中讀取最新價格（**零延遲、不消耗資料庫資源**）。
+* **部位同步**：透過背景排程（每 10 分鐘）從 Firebase Firestore 抓取一次未平倉部位（`OPEN`），快取至記憶體中。
+
+
+* **多空雙向風控引擎**：
+* **多單 (`BUY`)**：當現價 $\ge$ `tp1` 觸發止盈 (`TP_HIT`)；當現價 $\le$ `stopLossPrice` 觸發停損 (`SL_HIT`)。
+* **空單 (`SELL`)**：當現價 $\le$ `tp1` 觸發止盈 (`TP_HIT`)；當現價 $\ge$ `stopLossPrice` 觸發停損 (`SL_HIT`)。
+
+
+* **即時生命週期回寫**：一旦條件觸發，立即呼叫 Firestore 更新該筆訂單狀態為 `CLOSED`，寫入平倉價與平倉理由，並**同步從記憶體快取中移除**，確保不重複觸發。
 
 ---
 
 ## ⚙️ 環境變數設定 (`.env`)
 
-在專案根目錄下建立一個 `.env` 檔案，並填入以下金鑰：
+請在專案根目錄建立 `.env` 檔案，並填入以下設定：
 
 ```env
-# Google Gemini API Key
-GEMINI_API_KEY=your_gemini_api_key_here
+# Binance API (USDM 永續合約)
+API_KEY=你的_binance_api_key
+API_SECRET=你的_binance_api_secret
 
-# Binance API Credentials (建議先使用 Testnet 測試網)
-API_KEY=your_binance_api_key_here
-API_SECRET=your_binance_api_secret_here
+# Google Gemini AI
+GEMINI_API_KEY=你的_gemini_api_key
+
+# FRED API (美國總經數據)
+FRED_API_KEY=你的_fred_api_key
+
+# Discord Bot
+BOT_TOKEN=你的_discord_bot_token
 
 ```
 
+> 💡 **注意**：請確保根目錄已放置 Firebase 服務帳戶金鑰檔案：`services.json`。
+
 ---
 
-## 🚀 快速開始
+## 📦 安裝與環境準備
 
-### 1. 安裝相依套件
+確保電腦已安裝 **Node.js**，接著在專案根目錄執行以下指令安裝相依套件：
 
 ```bash
 npm install
 
 ```
 
-### 2. 編譯與執行
+---
 
-確保已正確設定 `tsconfig.json` 與相關 ES Modules 支援，透過 TypeScript 執行：
+## 👨‍🏫 教學：如何編譯與執行 TypeScript 專案
+
+由於 Node.js 無法直接辨識原生 TypeScript 檔案 (`.ts`)，我們需要透過編譯器將其轉譯為 JavaScript (`.js`)，或是透過現代工具即時執行。
+
+### 1. 初始化與設定 `tsconfig.json`
+
+如果專案尚未建立設定檔，可以執行以下指令自動產生：
 
 ```bash
-# 開發模式執行
-npx tsx src/bot.ts
+npx tsc --init
 
 ```
 
+建議檢查 `tsconfig.json` 中的關鍵設定（配合 ESM 模組與專案架構）：
+
+```json
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}
+
+```
+
+### 2. 開發模式（推薦：自動監控並即時重啟）
+
+在開發機器人時，若每次修改都要手動編譯會非常耗時。推薦安裝 `tsx` 來進行即時監控：
+
+```bash
+npm install tsx --save-dev
+
+```
+
+在 `package.json` 的 `scripts` 中加入：
+
+```json
+"scripts": {
+  "dev": "tsx watch src/discord.ts",
+  "build": "tsc",
+  "start": "node dist/discord.js"
+}
+
+```
+
+日常開發只需輸入：
+
+```bash
+npm run dev
+
+```
+
+### 3. 生產環境手動編譯與執行
+
+如果你需要手動打包部署：
+
+* **步驟一：執行編譯**（將 `src/` 底下的 `.ts` 轉譯為 `.js` 並輸出至 `dist/`）：
+
+```bash
+npx tsc
+
+```
+
+
+* **步驟二：啟動編譯後的程式**：
+
+```bash
+node dist/discord.js
+
+```
+
+
+
 ---
 
-## 🧠 AI 決策架構說明
+## 📊 交易訊號與風控摘要
 
-機器人每次執行 `runBotTask` 時，會經歷以下流程：
-
-1. **資料蒐集**：平行抓取指定幣種的 K 線、當前倉位（`Positions`）與現存掛單（`OpenOrders`）。
-2. **AI 推理**：將資料送往 `gemini-2.5-flash` 模型，並透過 `responseSchema` 強制回傳結構化的 JSON 決策（`AIDecision`）。
-3. **指令解析與執行**：
-* `NO_ACTION`：維持現狀。
-* `CANCEL_ORDERS`：取消所有未成交掛單與條件單。
-* `CLOSE_POSITION`：市價平倉所有現有部位。
-* `UPDATE_SL_TP`：動態更新止損與止盈價位。
-* `OPEN_NEW`：先平掉反向倉位，並掛出新的限價單與對應的風控止盈止損單。
+* **多空指令過濾**：AI 依據盤面與費波那契回撤分析給予明確的 `OPEN_NEW`、`CLOSE_POSITION` 或 `NO_ACTION` 指令，未達條件一律維持觀望。
+* **風險報酬比控制**：建倉建議將盈虧比嚴格控制在 `1:1.5` 到 `1:2.5` 之間，並配置明確的進場價、補倉價（DCA）、止損價以及三檔止盈目標（TP1、TP2、TP3）。
+* **高效能風控**：透過 WebSocket 結合記憶體快取每秒監控現價，將資料庫讀寫成本降低 99%，並確保觸及停利損時毫秒級自動平倉。

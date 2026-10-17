@@ -100,7 +100,7 @@ export async function saveSignalsAndReportsToFirestore(signals: TradingSignal[],
                     status: 'OPEN', // 標記目前為持倉中
                     openedAt: Timestamp.fromDate(batchTimestamp),
                     closedAt: null,
-                    closePrice: null // 初始化平倉價為 null
+                    closePrice: null
                 });
                 console.log(`📈 [持倉追蹤] 記錄新開倉單：${signal.symbol} (${signal.side})`);
 
