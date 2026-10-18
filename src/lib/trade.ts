@@ -7,7 +7,7 @@ import type { TradingSignal } from './analyze.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 interface SymbolFilter {
     tickSize: number;
@@ -302,109 +302,113 @@ export class TradingBotManager {
     public async executeDecision(symbol: string, decision: TradingSignal | null, defaultQuantity: number): Promise<void> {
         if (!decision) return;
 
-        const filters = this.getSymbolFilters(symbol);
-        const positions = await this.getCurrentPositions(symbol);
+        try {
+            const filters = this.getSymbolFilters(symbol);
+            const positions = await this.getCurrentPositions(symbol);
 
-        switch (decision.action) {
-            case 'NO_ACTION':
-                console.log(`[${symbol}] AI 建議保持現狀。`);
-                break;
+            switch (decision.action) {
+                case 'NO_ACTION':
+                    console.log(`[${symbol}] AI 建議保持現狀。`);
+                    break;
 
-            case 'CLOSE_POSITION':
-                console.log(`[${symbol}] AI 建議提前市價平倉！`);
-                await this.cancelAllOrdersAndAlgo(symbol);
+                case 'CLOSE_POSITION':
+                    console.log(`[${symbol}] AI 建議提前市價平倉！`);
+                    await this.cancelAllOrdersAndAlgo(symbol);
 
-                for (const pos of positions) {
-                    const amt = Math.abs(parseFloat(pos.positionAmt));
-                    if (amt > 0) {
-                        const closeSide = parseFloat(pos.positionAmt) > 0 ? 'SELL' : 'BUY';
-                        await this.client.submitNewOrder({
-                            symbol: symbol,
-                            side: closeSide,
-                            type: 'MARKET',
-                            quantity: this.adjustToStep(amt, filters.stepSize),
-                            reduceOnly: 'true'
-                        });
-                        console.log(`[${symbol}] 已執行市價平倉：${closeSide} ${amt}`);
+                    for (const pos of positions) {
+                        const amt = Math.abs(parseFloat(pos.positionAmt));
+                        if (amt > 0) {
+                            const closeSide = parseFloat(pos.positionAmt) > 0 ? 'SELL' : 'BUY';
+                            await this.client.submitNewOrder({
+                                symbol: symbol,
+                                side: closeSide,
+                                type: 'MARKET',
+                                quantity: this.adjustToStep(amt, filters.stepSize),
+                                reduceOnly: 'true'
+                            });
+                            console.log(`[${symbol}] 已執行市價平倉：${closeSide} ${amt}`);
+                        }
                     }
-                }
-                break;
+                    break;
 
-            case 'UPDATE_SL_TP':
-                console.log(`[${symbol}] AI 建議調整止盈/止損價位...`);
-                await this.cancelAllOrdersAndAlgo(symbol);
+                case 'UPDATE_SL_TP':
+                    console.log(`[${symbol}] AI 建議調整止盈/止損價位...`);
+                    await this.cancelAllOrdersAndAlgo(symbol);
 
-                if (decision.stopLossPrice && decision.stopLossPrice > 0) {
-                    const currentPositions = await this.getCurrentPositions(symbol);
-                    const currentPos = currentPositions[0];
-                    if (currentPos) {
-                        const isLong = parseFloat(currentPos.positionAmt) > 0;
-                        await this.client.submitNewAlgoOrder({
-                            symbol: symbol,
-                            side: isLong ? 'SELL' : 'BUY',
-                            type: 'STOP_MARKET',
-                            triggerPrice: this.adjustToStep(decision.stopLossPrice, filters.tickSize),
-                            closePosition: 'true',
-                            workingType: 'MARK_PRICE',
-                            algoType: 'CONDITIONAL'
-                        });
-                        console.log(`[${symbol}] 已更新止損單 (SL): ${decision.stopLossPrice}`);
+                    if (decision.stopLossPrice && decision.stopLossPrice > 0) {
+                        const currentPositions = await this.getCurrentPositions(symbol);
+                        const currentPos = currentPositions[0];
+                        if (currentPos) {
+                            const isLong = parseFloat(currentPos.positionAmt) > 0;
+                            await this.client.submitNewAlgoOrder({
+                                symbol: symbol,
+                                side: isLong ? 'SELL' : 'BUY',
+                                type: 'STOP_MARKET',
+                                triggerPrice: this.adjustToStep(decision.stopLossPrice, filters.tickSize),
+                                closePosition: 'true',
+                                workingType: 'MARK_PRICE',
+                                algoType: 'CONDITIONAL'
+                            });
+                            console.log(`[${symbol}] 已更新止損單 (SL): ${decision.stopLossPrice}`);
+                        }
                     }
-                }
 
-                if (decision.takeProfitPrices && decision.takeProfitPrices.tp1 > 0) {
-                    const currentPositions = await this.getCurrentPositions(symbol);
-                    const currentPos = currentPositions[0];
-                    if (currentPos) {
-                        const isLong = parseFloat(currentPos.positionAmt) > 0;
-                        await this.client.submitNewAlgoOrder({
-                            symbol: symbol,
-                            side: isLong ? 'SELL' : 'BUY',
-                            type: 'TAKE_PROFIT_MARKET',
-                            triggerPrice: this.adjustToStep(decision.takeProfitPrices.tp1, filters.tickSize),
-                            closePosition: 'true',
-                            workingType: 'MARK_PRICE',
-                            algoType: 'CONDITIONAL'
-                        });
-                        console.log(`[${symbol}] 已更新止盈單 (TP1): ${decision.takeProfitPrices.tp1}`);
+                    if (decision.takeProfitPrices && decision.takeProfitPrices.tp1 > 0) {
+                        const currentPositions = await this.getCurrentPositions(symbol);
+                        const currentPos = currentPositions[0];
+                        if (currentPos) {
+                            const isLong = parseFloat(currentPos.positionAmt) > 0;
+                            await this.client.submitNewAlgoOrder({
+                                symbol: symbol,
+                                side: isLong ? 'SELL' : 'BUY',
+                                type: 'TAKE_PROFIT_MARKET',
+                                triggerPrice: this.adjustToStep(decision.takeProfitPrices.tp1, filters.tickSize),
+                                closePosition: 'true',
+                                workingType: 'MARK_PRICE',
+                                algoType: 'CONDITIONAL'
+                            });
+                            console.log(`[${symbol}] 已更新止盈單 (TP1): ${decision.takeProfitPrices.tp1}`);
+                        }
                     }
-                }
-                break;
+                    break;
 
-            case 'OPEN_NEW':
-                console.log(`[${symbol}] AI 發起新開倉建議：${decision.side} @ ${decision.entryPrice}`);
-                await this.cancelAllOrdersAndAlgo(symbol);
+                case 'OPEN_NEW':
+                    console.log(`[${symbol}] AI 發起新開倉建議：${decision.side} @ ${decision.entryPrice}`);
+                    await this.cancelAllOrdersAndAlgo(symbol);
 
-                for (const pos of positions) {
-                    const amt = Math.abs(parseFloat(pos.positionAmt));
-                    if (amt > 0) {
-                        const closeSide = parseFloat(pos.positionAmt) > 0 ? 'SELL' : 'BUY';
-                        await this.client.submitNewOrder({
-                            symbol: symbol,
-                            side: closeSide,
-                            type: 'MARKET',
-                            quantity: this.adjustToStep(amt, filters.stepSize),
-                            reduceOnly: 'true'
-                        });
-                        console.log(`[${symbol}] 已執行市價平倉：${closeSide} ${amt}`);
+                    for (const pos of positions) {
+                        const amt = Math.abs(parseFloat(pos.positionAmt));
+                        if (amt > 0) {
+                            const closeSide = parseFloat(pos.positionAmt) > 0 ? 'SELL' : 'BUY';
+                            await this.client.submitNewOrder({
+                                symbol: symbol,
+                                side: closeSide,
+                                type: 'MARKET',
+                                quantity: this.adjustToStep(amt, filters.stepSize),
+                                reduceOnly: 'true'
+                            });
+                            console.log(`[${symbol}] 已執行市價平倉：${closeSide} ${amt}`);
+                        }
                     }
-                }
 
-                if (!decision.entryPrice) break;
-                const isBuy = decision.side === 'BUY';
-                const limitPrice = this.adjustToStep(decision.entryPrice, filters.tickSize);
-                const finalQty = this.adjustToStep(defaultQuantity, filters.stepSize);
+                    if (!decision.entryPrice) break;
+                    const isBuy = decision.side === 'BUY';
+                    const limitPrice = this.adjustToStep(decision.entryPrice, filters.tickSize);
+                    const finalQty = this.adjustToStep(defaultQuantity, filters.stepSize);
 
-                await this.client.submitNewOrder({
-                    symbol: symbol,
-                    side: isBuy ? 'BUY' : 'SELL',
-                    type: 'LIMIT',
-                    price: limitPrice,
-                    quantity: finalQty,
-                    timeInForce: 'GTC'
-                });
-                console.log(`[${symbol}] 已送出新開倉限價單：${decision.side} 價格 ${limitPrice} 數量 ${finalQty}`);
-                break;
+                    await this.client.submitNewOrder({
+                        symbol: symbol,
+                        side: isBuy ? 'BUY' : 'SELL',
+                        type: 'LIMIT',
+                        price: limitPrice,
+                        quantity: finalQty,
+                        timeInForce: 'GTC'
+                    });
+                    console.log(`[${symbol}] 已送出新開倉限價單：${decision.side} 價格 ${limitPrice} 數量 ${finalQty}`);
+                    break;
+            }
+        } catch (error: any) {
+            console.error(`❌ [${symbol}] 執行 AI 決策動作 (${decision.action}) 時發生錯誤：`, error.message || error);
         }
     }
 }

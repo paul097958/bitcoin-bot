@@ -93,8 +93,8 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
             </h2>
 
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-                {/* 左側：日期選取清單（保持適當高度） */}
-                <div className="lg:col-span-1 bg-gray-900/40 border border-gray-800 rounded-xl p-4 space-y-2 sticky top-6">
+                {/* 左側：改用 lg:sticky lg:top-6，避免行動端被 sticky 卡住 */}
+                <div className="lg:col-span-1 bg-gray-900/40 border border-gray-800 rounded-xl p-4 space-y-2 lg:sticky lg:top-6">
                     <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">
                         選擇平倉日期 ({availableDates.length})
                     </h3>
@@ -130,7 +130,7 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
                     })}
                 </div>
 
-                {/* 右側：詳細平倉卡片清單（拿掉固定高度與捲軸，讓它自然展開） */}
+                {/* 右側：詳細平倉卡片清單 */}
                 <div className="lg:col-span-3 space-y-4">
                     <div className="text-xs text-gray-400 bg-gray-900/60 px-4 py-2.5 rounded-lg border border-gray-800 flex justify-between items-center">
                         <span>目前檢視日期：<strong className="text-rose-400">{selectedDate}</strong></span>

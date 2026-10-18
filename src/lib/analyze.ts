@@ -11,7 +11,7 @@ import { getOpenPositions, getLatestMarketReport } from './firestore.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
 const apiKey = process.env.API_KEY;
 const apiSecret = process.env.API_SECRET;
@@ -439,66 +439,205 @@ function buildMarketReportText(data: MarketReportData): string {
 }
 
 
-function formatLatestMarketReportToText(reportResult: LatestMarketReportResult | null): string {
-    if (!reportResult || !reportResult.data) {
+function formatLatestMarketReportToText(
+    reportResult: LatestMarketReportResult | null
+): string {
+    if (!reportResult?.data) {
         return "目前沒有找到最新的市場報告資料。";
     }
 
     const { docId, data } = reportResult;
     const lines: string[] = [];
 
-    // 將 Firestore Timestamp 轉為本地時間字串
-    const createdAtStr = data.createdAt && typeof data.createdAt.toDate === 'function'
-        ? data.createdAt.toDate().toLocaleString()
-        : 'N/A';
+    // 格式化數值，避免 undefined、null 或 NaN
+    const formatValue = (
+        value: unknown,
+        prefix = ""
+    ): string => {
+        if (
+            value === null ||
+            value === undefined ||
+            value === "" ||
+            (typeof value === "number" && !Number.isFinite(value))
+        ) {
+            return "N/A";
+        }
 
-    lines.push(`==================================================`);
-    lines.push(`📈 最新市場分析與交易訊號報告`);
-    lines.push(`==================================================`);
-    lines.push(`• 報告檔案 ID : ${docId}`);
-    lines.push(`• 建立時間    : ${createdAtStr}`);
-    lines.push(`• 分析幣種數量: ${data.totalCoinsAnalyzed} 個`);
-    lines.push(`--------------------------------------------------\n`);
+        if (typeof value === "number") {
+            return `${prefix}${value.toLocaleString("en-US", {
+                maximumFractionDigits: 12,
+            })}`;
+        }
 
-    // 1. 顯示 AI 產出的交易訊號 (Trading Signals)
-    lines.push(`🤖 【 交易訊號摘要 (Trading Signals) 】`);
+        return `${prefix}${String(value)}`;
+    };
+
+    // 格式化價格
+    const price = (value: unknown): string =>
+        formatValue(value, "$");
+
+    // 格式化時間，固定使用台灣時區
+    let createdAtStr = "N/A";
+
+    try {
+        if (
+            data.createdAt &&
+            typeof data.createdAt.toDate === "function"
+        ) {
+            createdAtStr = data.createdAt.toDate().toLocaleString(
+                "zh-TW",
+                {
+                    timeZone: "Asia/Taipei",
+                    year: "numeric",
+                    month: "2-digit",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hour12: false,
+                }
+            );
+        }
+    } catch {
+        createdAtStr = "N/A";
+    }
+
+    // 報告標題
+    lines.push("📈 最新市場分析與交易訊號報告");
+    lines.push("=".repeat(60));
+    lines.push(`報告 ID：${docId}`);
+    lines.push(`建立時間：${createdAtStr}`);
+    lines.push(
+        `分析幣種數量：${formatValue(data.totalCoinsAnalyzed)} 個`
+    );
+    lines.push("");
+
+    // ==================================================
+    // 1. 交易訊號摘要
+    // ==================================================
+    lines.push("🤖 交易訊號摘要 (Trading Signals)");
+    lines.push("-".repeat(60));
+
     if (Array.isArray(data.signals) && data.signals.length > 0) {
-        // 明確指定參數 sig 的型別為 TradingSignal
         data.signals.forEach((sig: TradingSignal, index: number) => {
-            lines.push(`  🔹 [${index + 1}]${sig.symbol} | 動作: ${sig.action} \vert{} 方向: ${sig.side}`);
-            lines.push(`     • 強度: ${sig.strength} \vert{} 多空傾向: ${sig.bias}`);
-            lines.push(`     • 進場價: $${sig.entryPrice} | 補倉價: $${sig.dcaPrice} \vert{} 停損價: $${sig.stopLossPrice}`);
-            lines.push(`     • 止盈價: TP1: $${sig.takeProfitPrices.tp1} | TP2: $${sig.takeProfitPrices.tp2} \vert{} TP3:$${sig.takeProfitPrices.tp3}`);
-            lines.push(`     • 支撐位: [${sig.supports.join(', ')}] \vert{} 壓力位: [${sig.resistances.join(', ')}]`);
-            lines.push(`     • 研判理由: ${sig.reason}`);
-            lines.push(``);
+            const tp = sig.takeProfitPrices;
+
+            lines.push(`[${index + 1}] ${sig.symbol ?? "UNKNOWN"}`);
+            lines.push("─".repeat(40));
+
+            lines.push(
+                `交易動作：${formatValue(sig.action)}`
+            );
+            lines.push(
+                `交易方向：${formatValue(sig.side)}`
+            );
+            lines.push(
+                `訊號強度：${formatValue(sig.strength)}`
+            );
+            lines.push(
+                `多空傾向：${formatValue(sig.bias)}`
+            );
+            lines.push("");
+
+            lines.push("【價格設定】");
+            lines.push(`  進場價格：${price(sig.entryPrice)}`);
+            lines.push(`  補倉價格：${price(sig.dcaPrice)}`);
+            lines.push(`  停損價格：${price(sig.stopLossPrice)}`);
+            lines.push(`  止盈 TP1：${price(tp?.tp1)}`);
+            lines.push(`  止盈 TP2：${price(tp?.tp2)}`);
+            lines.push(`  止盈 TP3：${price(tp?.tp3)}`);
+            lines.push("");
+
+            const supports = Array.isArray(sig.supports)
+                ? sig.supports.map((v) => formatValue(v)).join(", ")
+                : "N/A";
+
+            const resistances = Array.isArray(sig.resistances)
+                ? sig.resistances.map((v) => formatValue(v)).join(", ")
+                : "N/A";
+
+            lines.push("【技術分析】");
+            lines.push(`  支撐位：${supports}`);
+            lines.push(`  壓力位：${resistances}`);
+            lines.push(`  研判理由：${formatValue(sig.reason)}`);
+            lines.push("");
         });
     } else {
-        lines.push(`  (無交易訊號資料)`);
+        lines.push("目前沒有交易訊號。");
+        lines.push("");
     }
-    lines.push(`--------------------------------------------------\n`);
 
-    // 2. 顯示各幣種結構化市場數據摘要 (Market Reports)
-    lines.push(`📊 【 幣種市場與總經數據摘要 (Market Reports) 】`);
+    // ==================================================
+    // 2. 幣種市場數據
+    // ==================================================
+    lines.push("📊 幣種市場與總經數據摘要 (Market Reports)");
+    lines.push("-".repeat(60));
+
     if (Array.isArray(data.reports) && data.reports.length > 0) {
-        // 明確指定參數 rep 的型別為 MarketReportData
-        data.reports.forEach((rep: MarketReportData) => {
-            lines.push(`  📌 幣種: ${rep.targetSymbol} \vert{} 現價: $${rep.currentPrice !== null ? rep.currentPrice.toLocaleString() : 'N/A'}`);
+        data.reports.forEach((rep: MarketReportData, index: number) => {
+            lines.push(
+                `[${index + 1}] ${rep.targetSymbol ?? "UNKNOWN"}`
+            );
+            lines.push("─".repeat(40));
+
+            lines.push(`目前價格：${price(rep.currentPrice)}`);
+
+            // 關鍵價位
             if (rep.keyLevels) {
-                lines.push(`     • 關鍵價位 -> PDH: ${rep.keyLevels.pdh} \vert{} PDL:${rep.keyLevels.pdl} | DO: ${rep.keyLevels.dailyOpen} \vert{} WO:${rep.keyLevels.weeklyOpen}`);
+                lines.push("");
+                lines.push("【關鍵價位】");
+                lines.push(
+                    `  前日高點 PDH：${price(rep.keyLevels.pdh)}`
+                );
+                lines.push(
+                    `  前日低點 PDL：${price(rep.keyLevels.pdl)}`
+                );
+                lines.push(
+                    `  日開盤價 DO：${price(rep.keyLevels.dailyOpen)}`
+                );
+                lines.push(
+                    `  週開盤價 WO：${price(rep.keyLevels.weeklyOpen)}`
+                );
             }
-            if (rep.orderBook && rep.orderBook.bestBid && rep.orderBook.bestAsk) {
-                lines.push(`     • 最佳買賣 -> Bid: ${rep.orderBook.bestBid[0]} (${rep.orderBook.bestBid[1]}) / Ask: ${rep.orderBook.bestAsk[0]} (${rep.orderBook.bestAsk[1]})`);
+
+            // 訂單簿
+            if (rep.orderBook) {
+                const { bestBid, bestAsk } = rep.orderBook;
+
+                lines.push("");
+                lines.push("【訂單簿】");
+
+                if (Array.isArray(bestBid) && bestBid.length >= 2) {
+                    lines.push(
+                        `  最佳買價 Bid：${price(bestBid[0])} ` +
+                        `(數量：${formatValue(bestBid[1])})`
+                    );
+                } else {
+                    lines.push("  最佳買價 Bid：N/A");
+                }
+
+                if (Array.isArray(bestAsk) && bestAsk.length >= 2) {
+                    lines.push(
+                        `  最佳賣價 Ask：${price(bestAsk[0])} ` +
+                        `(數量：${formatValue(bestAsk[1])})`
+                    );
+                } else {
+                    lines.push("  最佳賣價 Ask：N/A");
+                }
             }
-            lines.push(``);
+
+            lines.push("");
         });
     } else {
-        lines.push(`  (無詳細市場報告資料)`);
+        lines.push("目前沒有詳細市場報告資料。");
+        lines.push("");
     }
 
-    lines.push(`==================================================`);
+    // 報告結尾
+    lines.push("=".repeat(60));
+    lines.push("報告結束");
 
-    return lines.join('\n');
+    return lines.join("\n");
 }
 
 async function analyzeCoinsWithGemini(marketReportsText: string, openPositionText: string, latestMarketReportText: string): Promise<TradingSignal[]> {
@@ -673,9 +812,10 @@ export async function runMarketAnalysisPipeline(): Promise<{ marketDataReports: 
     }
     const formattedOpenPositionsText = formatOpenPositionsToText(await getOpenPositions());
     const formattedLatestMarketReportText = formatLatestMarketReportToText(await getLatestMarketReport());
+    console.log(formattedLatestMarketReportText);
 
     console.log('🤖 數據收集完畢，正在傳送給 Gemini AI 進行結構化分析...\n');
-    
+
     // 1. 取得結構化 JSON 訊號
     const signals: TradingSignal[] = await analyzeCoinsWithGemini(allReports, formattedOpenPositionsText, formattedLatestMarketReportText);
 

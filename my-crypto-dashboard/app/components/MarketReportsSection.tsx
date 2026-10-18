@@ -104,7 +104,7 @@ export default function MarketReportsSection({ reports }: MarketReportsSectionPr
     return (
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
             {/* 左側：階層式選單 (先選天、再選報告)，加上 sticky top-6 固定在畫面 */}
-            <div className="lg:col-span-1 bg-gray-900/40 border border-gray-800 rounded-xl p-4 space-y-4 sticky top-6">
+            <div className="lg:col-span-1 bg-gray-900/40 border border-gray-800 rounded-xl p-4 space-y-4 lg:sticky lg:top-6">
                 <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2">
                     選擇分析日期 ({availableDates.length})
                 </h3>
