@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import axios from 'axios';
-import SYMBOLS from './data/symbols.json' with { type: 'json' };
+import SYMBOLS from '../data/symbols.json' with { type: 'json' };
 import { GoogleGenAI, Type } from '@google/genai';
 import type { PositionDocument, LatestMarketReportResult } from './firestore.js';
 import { getOpenPositions, getLatestMarketReport } from './firestore.js';
@@ -56,7 +56,7 @@ interface TopAccountRatioData {
 
 export interface TradingSignal {
     symbol: string;
-    action: 'NO_ACTION' | 'OPEN_NEW' | 'CLOSE_POSITION';
+    action: 'NO_ACTION' | 'OPEN_NEW' | 'CLOSE_POSITION' | 'UPDATE_SL_TP';
     side: 'BUY' | 'SELL' | 'NONE';
     strength: '強' | '中' | '弱';
     bias: '偏多' | '偏空' | '盤整';
@@ -78,7 +78,8 @@ export interface MarketReportData {
     currentPrice: number | null;
     keyLevels: { pdh: any; pdl: any; dailyOpen: any; weeklyOpen: any } | null;
     orderBook: { bestBid: [string, string] | null; bestAsk: [string, string] | null };
-    klinesData: KlineData[];
+    klines4hData: KlineData[];
+    klines1hData: KlineData[];
     openInterests: any[];
     accountRatioData: TopAccountRatioData[];
     fundingRates: any[];
@@ -265,7 +266,8 @@ async function mergeMarketData(targetSymbol: string): Promise<MarketReportData> 
     const openInterests = await fetchOpenInterestHistory(targetSymbol);
     const orderBook = await fetchOrderBook(targetSymbol);
     const keyLevels = await fetchKeyLevels(targetSymbol);
-    const klinesData = await getKlines(targetSymbol, '4h', 50);
+    const klines4hData = await getKlines(targetSymbol, '4h', 50);
+    const klines1hData = await getKlines(targetSymbol, '1h', 10);
 
     // 總經資料僅針對 BTCUSDT 抓取
     const cpiData = targetSymbol === 'BTCUSDT' ? await getFredHistory('CPIAUCSL', 5) : [];
@@ -297,7 +299,8 @@ async function mergeMarketData(targetSymbol: string): Promise<MarketReportData> 
         currentPrice,
         keyLevels,
         orderBook: { bestBid, bestAsk },
-        klinesData,
+        klines4hData,
+        klines1hData,
         openInterests: Array.isArray(openInterests) ? openInterests : [],
         accountRatioData,
         fundingRates: Array.isArray(fundingRates) ? fundingRates : [],
@@ -370,8 +373,18 @@ function buildMarketReportText(data: MarketReportData): string {
     lines.push(`--------------------------------------------------\n`);
     // 3. K 線資料
     lines.push(`📌 【 ${data.targetSymbol} 近期 K 線資料 (4h 週期，最近 50 筆) 】`);
-    if (Array.isArray(data.klinesData) && data.klinesData.length > 0) {
-        data.klinesData.forEach((k) => {
+    if (Array.isArray(data.klines4hData) && data.klines4hData.length > 0) {
+        data.klines4hData.forEach((k) => {
+            const timeStr = new Date(k.time).toLocaleString();
+            lines.push(`   • 時間: ${timeStr} | 開: ${k.open} | 高: ${k.high} | 低: ${k.low} | 收: ${k.close} | 成交量: ${k.volume}`);
+        });
+    } else {
+        lines.push(`   (無法取得 K 線資料)`);
+    }
+    // 4. K 線資料
+    lines.push(`📌 【 ${data.targetSymbol} 近期 K 線資料 (1h 週期，最近 10 筆) 】`);
+    if (Array.isArray(data.klines1hData) && data.klines1hData.length > 0) {
+        data.klines1hData.forEach((k) => {
             const timeStr = new Date(k.time).toLocaleString();
             lines.push(`   • 時間: ${timeStr} | 開: ${k.open} | 高: ${k.high} | 低: ${k.low} | 收: ${k.close} | 成交量: ${k.volume}`);
         });
@@ -494,7 +507,7 @@ async function analyzeCoinsWithGemini(marketReportsText: string, openPositionTex
 以下是多個幣種的市場即時數據（包含合約現價、關鍵價位、訂單簿、K線、大戶多空比、持倉量、資金費率）以及總經背景。
 請使用費波那契回撤，來評估各幣種的支撐與阻力位，並分析多空趨勢。
 
-請針對每一個輸入的幣種進行專業分析，當有非常明確的多空行情時，可以使用 OPEN_NEW 建倉，盈虧比控制在 1:1.5 到 1:2.5，其餘沒有非常明確訊號的可給予 NO_ACTION。請勿在沒有非常明確訊號的情況下建倉。
+請針對每一個輸入的幣種進行專業分析，當有非常明確的多空行情時，並且目前沒有持倉可以使用 OPEN_NEW 建倉，盈虧比控制在 1:1.5 到 1:2.5，建倉的價格 entryPrice 要考慮是否能夠掛到單，其餘沒有非常明確訊號或目前正在持倉可給予 NO_ACTION。請勿在沒有非常明確訊號的情況下建倉。
 以下為之前已建倉資料(如果有特殊的行情改變，可以提前平倉，切記不要盈虧一點點就平倉，重要的是行情改變)：
 ${openPositionText}
 
@@ -524,10 +537,10 @@ ${marketReportsText}
                             symbol: { type: Type.STRING, description: '幣種代號，例如 BTCUSDT' },
                             action: {
                                 type: Type.STRING,
-                                enum: ['NO_ACTION', 'OPEN_NEW', 'CLOSE_POSITION'],
-                                description: '交易動作指令，NO_ACTION 表示暫不操作，OPEN_NEW 表示建倉，CLOSE_POSITION 表示平倉'
+                                enum: ['NO_ACTION', 'OPEN_NEW', 'CLOSE_POSITION', 'UPDATE_SL_TP'],
+                                description: '交易動作指令，NO_ACTION 表示暫不操作，OPEN_NEW 表示建倉，CLOSE_POSITION 表示平倉，UPDATE_SL_TP 表示更改停損和止盈價格。'
                             },
-                            side: { type: Type.STRING, enum: ['BUY', 'SELL', 'NONE'], description: '買入(多)或賣出(空)' },
+                            side: { type: Type.STRING, enum: ['BUY', 'SELL', 'NONE'], description: '買入(多)或賣出(空)，只有 OPEN_NEW 時才要填入。' },
                             strength: { type: Type.STRING, enum: ['強', '中', '弱'] },
                             bias: { type: Type.STRING, enum: ['偏多', '偏空', '盤整'] },
                             supports: {

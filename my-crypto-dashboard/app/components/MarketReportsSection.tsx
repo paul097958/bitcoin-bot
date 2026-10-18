@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 interface Signal {
     symbol: string;
@@ -27,14 +27,34 @@ interface MarketReportsSectionProps {
 }
 
 export default function MarketReportsSection({ reports }: MarketReportsSectionProps) {
+    const [selectedDate, setSelectedDate] = useState<string>('');
     const [selectedReportId, setSelectedReportId] = useState<string>('');
     const [isMounted, setIsMounted] = useState<boolean>(false);
 
-    // 確保元件載入後才執行客戶端專屬渲染，避免 SSR 日期不一致
+    // 確保元件載入後才執行客戶端專屬渲染，並初始化預設日期與報告
     useEffect(() => {
         setIsMounted(true);
         if (reports && reports.length > 0) {
-            setSelectedReportId(reports[0].id);
+            // 找出所有報告的日期 (YYYY-MM-DD)
+            const dates = Array.from(new Set(reports.map(r => {
+                if (!r.createdAt) return '未分類';
+                return new Date(r.createdAt).toISOString().split('T')[0];
+            }))).sort((a, b) => b.localeCompare(a)); // 依日期降冪排序（最新在前）
+
+            if (dates.length > 0) {
+                const latestDate = dates[0];
+                setSelectedDate(latestDate);
+
+                // 預設選取該最新日期底下的第一份報告
+                const reportsOfLatestDate = reports.filter(r => {
+                    const d = r.createdAt ? new Date(r.createdAt).toISOString().split('T')[0] : '未分類';
+                    return d === latestDate;
+                });
+
+                if (reportsOfLatestDate.length > 0) {
+                    setSelectedReportId(reportsOfLatestDate[0].id);
+                }
+            }
         }
     }, [reports]);
 
@@ -46,47 +66,105 @@ export default function MarketReportsSection({ reports }: MarketReportsSectionPr
         );
     }
 
-    const currentReport = reports.find(r => r.id === selectedReportId) || reports[0];
+    // 1. 將報告依照日期 (YYYY-MM-DD) 分組
+    const groupedByDate: { [date: string]: Report[] } = {};
+    reports.forEach(report => {
+        const dateKey = report.createdAt ? new Date(report.createdAt).toISOString().split('T')[0] : '未分類';
+        if (!groupedByDate[dateKey]) {
+            groupedByDate[dateKey] = [];
+        }
+        groupedByDate[dateKey].push(report);
+    });
 
-    // 安全格式化日期的小工具
-    const formatDate = (dateStr: string | null) => {
+    const availableDates = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a));
+    const reportsForSelectedDate = groupedByDate[selectedDate] || [];
+
+    // 確保當前選中的 reportId 存在於當前日期的報告中，若無則切換到該日的第一個
+    const currentReport = reportsForSelectedDate.find(r => r.id === selectedReportId) || reportsForSelectedDate[0] || reports[0];
+
+    // 當切換日期時，自動選取該日期的第一份報告
+    const handleDateChange = (date: string) => {
+        setSelectedDate(date);
+        const dayReports = groupedByDate[date] || [];
+        if (dayReports.length > 0) {
+            setSelectedReportId(dayReports[0].id);
+        }
+    };
+
+    // 安全格式化日期時間的小工具
+    const formatDateTime = (dateStr: string | null) => {
         if (!dateStr || !isMounted) return '';
         try {
-            return new Date(dateStr).toLocaleString();
+            return new Date(dateStr).toLocaleTimeString(); // 顯示時分秒就好，因為日期已經在左側分類
         } catch {
             return dateStr;
         }
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            {/* 左側：報告列表清單 (Sidebar) */}
-            <div className="lg:col-span-1 bg-gray-900/40 border border-gray-800 rounded-xl p-4 space-y-2 max-h-[500px] overflow-y-auto">
-                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3 px-2">
-                    選擇歷史報告 ({reports.length})
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+            {/* 左側：階層式選單 (先選天、再選報告)，加上 sticky top-6 固定在畫面 */}
+            <div className="lg:col-span-1 bg-gray-900/40 border border-gray-800 rounded-xl p-4 space-y-4 sticky top-6">
+                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2">
+                    選擇分析日期 ({availableDates.length})
                 </h3>
-                {reports.map((rep) => {
-                    const isSelected = rep.id === selectedReportId;
-                    
-                    return (
-                        <button
-                            key={rep.id}
-                            onClick={() => setSelectedReportId(rep.id)}
-                            className={`w-full text-left p-3 rounded-lg transition-all text-sm flex flex-col gap-1 border ${
-                                isSelected
-                                    ? 'bg-blue-600/20 border-blue-500/50 text-blue-300 shadow-md'
-                                    : 'bg-gray-950/40 border-gray-800/60 text-gray-300 hover:bg-gray-800/50'
-                            }`}
-                        >
-                            <span className="font-mono text-xs font-bold truncate">ID: {rep.id}</span>
-                            <span className="text-xs text-gray-400">🕒 {formatDate(rep.createdAt) || rep.id}</span>
-                            <span className="text-[10px] text-gray-500">分析幣種: {rep.totalCoinsAnalyzed} 個</span>
-                        </button>
-                    );
-                })}
+
+                {/* 1. 日期選擇按鈕清單 */}
+                <div className="space-y-1.5">
+                    {availableDates.map((dateStr) => {
+                        const isDateSelected = dateStr === selectedDate;
+                        const count = groupedByDate[dateStr].length;
+
+                        return (
+                            <button
+                                key={dateStr}
+                                onClick={() => handleDateChange(dateStr)}
+                                className={`w-full text-left px-3 py-2.5 rounded-lg transition-all text-xs flex justify-between items-center border ${
+                                    isDateSelected
+                                        ? 'bg-blue-600/20 border-blue-500/50 text-blue-300 font-bold shadow-md'
+                                        : 'bg-gray-950/40 border-gray-800/60 text-gray-400 hover:bg-gray-800/50'
+                                }`}
+                            >
+                                <span>📅 {dateStr}</span>
+                                <span className="px-1.5 py-0.5 rounded bg-gray-800 text-gray-300 text-[10px]">
+                                    {count} 份
+                                </span>
+                            </button>
+                        );
+                    })}
+                </div>
+
+                <hr className="border-gray-800" />
+
+                <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2">
+                    該日報告時段 ({reportsForSelectedDate.length})
+                </h3>
+
+                {/* 2. 該日期底下的具體報告時間清單 */}
+                <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                    {reportsForSelectedDate.map((rep) => {
+                        const isSelected = rep.id === selectedReportId;
+                        const timeStr = rep.createdAt && isMounted ? new Date(rep.createdAt).toLocaleTimeString() : rep.id;
+
+                        return (
+                            <button
+                                key={rep.id}
+                                onClick={() => setSelectedReportId(rep.id)}
+                                className={`w-full text-left p-2.5 rounded-lg transition-all text-xs flex flex-col gap-1 border ${
+                                    isSelected
+                                        ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300 shadow-md'
+                                        : 'bg-gray-950/40 border-gray-800/60 text-gray-300 hover:bg-gray-800/50'
+                                }`}
+                            >
+                                <span className="font-mono font-bold">🕒 時段: {timeStr}</span>
+                                <span className="text-[10px] text-gray-400">分析幣種: {rep.totalCoinsAnalyzed} 個</span>
+                            </button>
+                        );
+                    })}
+                </div>
             </div>
 
-            {/* 右側：被選中報告的詳細訊號內容 */}
+            {/* 右側：被選中報告的詳細訊號內容（自然展開，不壓縮） */}
             <div className="lg:col-span-3 bg-gray-900/40 border border-gray-800 rounded-xl p-6 space-y-4 shadow-md">
                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-gray-800 pb-3">
                     <div>
@@ -94,7 +172,7 @@ export default function MarketReportsSection({ reports }: MarketReportsSectionPr
                             檢視中 ID: {currentReport.id}
                         </span>
                         <span className="ml-3 text-sm text-gray-400">
-                            🕒 {formatDate(currentReport.createdAt)}
+                            🕒 {currentReport.createdAt && isMounted ? new Date(currentReport.createdAt).toLocaleString() : ''}
                         </span>
                     </div>
                     <span className="text-xs text-gray-400">分析幣種數: {currentReport.totalCoinsAnalyzed}</span>
@@ -132,7 +210,7 @@ export default function MarketReportsSection({ reports }: MarketReportsSectionPr
                                 </div>
                             </div>
 
-                            {/* Reason 文字框：修正錯誤的 wrap-break-word 為 break-words */}
+                            {/* Reason 文字框 */}
                             <div className="text-xs text-gray-300 bg-gray-900 p-3 rounded-lg border border-gray-800/60 break-words whitespace-pre-wrap leading-relaxed">
                                 💡 <span className="font-semibold text-gray-400">研判理由：</span>{sig.reason}
                             </div>

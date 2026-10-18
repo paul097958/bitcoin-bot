@@ -2,7 +2,7 @@ import type { MarketReportData } from './analyze.js';
 import type { TradingSignal } from './analyze.js';
 import { cert, initializeApp } from 'firebase-admin/app';
 import { fetchCurrentPrice } from './analyze.js';
-import serviceAccount from '../services.json' with { type: 'json' };
+import serviceAccount from '../../services.json' with { type: 'json' };
 initializeApp({
     credential: cert(serviceAccount as any),
 });
@@ -72,7 +72,7 @@ export async function saveSignalsAndReportsToFirestore(signals: TradingSignal[],
 
         console.log(`✅ [Firestore] 成功儲存市場報告！文件 ID: ${docId}`);
 
-        // 2. 處理 OPEN_NEW 與 CLOSE_POSITION 的持倉追蹤集合
+        // 2. 處理 OPEN_NEW、CLOSE_POSITION 與 UPDATE_SL_TP 的持倉追蹤集合
         const positionsCollection = db.collection('trade_positions');
 
         for (const signal of signals) {
@@ -140,6 +140,27 @@ export async function saveSignalsAndReportsToFirestore(signals: TradingSignal[],
                     console.log(`📉 [持倉追蹤] 成功更新平倉單：${signal.symbol}，平倉價: ${currentClosePrice}，已填入平倉時間`);
                 } else {
                     console.warn(`⚠️ [持倉追蹤] 收到 ${signal.symbol} 的平倉訊號，但在資料庫中找不到對應的 OPEN 紀錄。`);
+                }
+
+            } else if (signal.action === 'UPDATE_SL_TP') {
+                // 3. 處理動態更新止損與止盈價位
+                const querySnapshot = await positionsCollection
+                    .where('symbol', '==', signal.symbol)
+                    .where('status', '==', 'OPEN')
+                    .get();
+
+                if (!querySnapshot.empty && querySnapshot.docs[0]) {
+                    const openDoc = querySnapshot.docs[0];
+
+                    // 準備更新的資料欄位（可依需求同步更新 reason 或保留原原因）
+                    await openDoc.ref.update({
+                        stopLossPrice: signal.stopLossPrice,
+                        takeProfitPrices: signal.takeProfitPrices,
+                        reason: `[SL/TP更新] ${signal.reason}`
+                    });
+                    console.log(`🔄 [持倉追蹤] 成功更新 ${signal.symbol} 的止盈/止損價位！`);
+                } else {
+                    console.warn(`⚠️ [持倉追蹤] 收到 ${signal.symbol} 的更新 SL/TP 訊號，但在資料庫中找不到對應的 OPEN 紀錄。`);
                 }
             }
         }
