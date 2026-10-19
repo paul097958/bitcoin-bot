@@ -50,7 +50,7 @@ async function sendAnalysisReport() {
             const currentPrice = await fetchCurrentPrice(signal.symbol)
             let quantity: number;
             if(currentPrice){
-                quantity = 15000 / currentPrice;
+                quantity = 5000 / currentPrice;
             }else{
                 quantity = getCoinQuantity(signal.symbol)
             }

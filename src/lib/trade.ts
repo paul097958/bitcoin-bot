@@ -303,6 +303,10 @@ export class TradingBotManager {
         if (!decision) return;
 
         try {
+            await this.client.setLeverage({
+                symbol,
+                leverage: 20
+            })
             const filters = this.getSymbolFilters(symbol);
             const positions = await this.getCurrentPositions(symbol);
 
