@@ -24,18 +24,61 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
     const [selectedDate, setSelectedDate] = useState<string>('');
     const [isMounted, setIsMounted] = useState<boolean>(false);
 
+    function getTaiwanDateKey(dateString?: string | null): string {
+        if (!dateString) return '未分類';
+
+        const date = new Date(dateString);
+
+        if (Number.isNaN(date.getTime())) return '未分類';
+
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: 'Asia/Taipei',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        }).formatToParts(date);
+
+        const year = parts.find(p => p.type === 'year')?.value;
+        const month = parts.find(p => p.type === 'month')?.value;
+        const day = parts.find(p => p.type === 'day')?.value;
+
+        return year && month && day
+            ? `${year}-${month}-${day}`
+            : '未分類';
+    }
+
+    // 將日期轉成毫秒，方便排序
+    function getTimestamp(dateString?: string | null): number {
+        if (!dateString) return 0;
+
+        const timestamp = new Date(dateString).getTime();
+
+        return Number.isNaN(timestamp) ? 0 : timestamp;
+    }
+
     useEffect(() => {
         setIsMounted(true);
-        if (closedPositions && closedPositions.length > 0) {
-            const dates = Array.from(new Set(closedPositions.map(p => {
-                if (!p.closedAt) return '未分類';
-                return new Date(p.closedAt).toISOString().split('T')[0];
-            }))).sort((a, b) => b.localeCompare(a));
 
-            if (dates.length > 0) {
-                setSelectedDate(dates[0]);
+        const dates = Array.from(
+            new Set(
+                closedPositions.map(pos =>
+                    getTaiwanDateKey(pos.closedAt)
+                )
+            )
+        ).sort((a, b) => {
+            if (a === '未分類') return 1;
+            if (b === '未分類') return -1;
+
+            return b.localeCompare(a);
+        });
+
+        setSelectedDate(previousDate => {
+            if (dates.includes(previousDate)) {
+                return previousDate;
             }
-        }
+
+            return dates[0] ?? '';
+        });
     }, [closedPositions]);
 
     if (!closedPositions || closedPositions.length === 0) {
@@ -72,19 +115,54 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
         }
     };
 
-    const groupedByDate: { [date: string]: { positions: ClosedPosition[]; dailyTotalPnl: number } } = {};
-    
+    const groupedByDate: {
+        [date: string]: {
+            positions: ClosedPosition[];
+            dailyTotalPnl: number;
+        };
+    } = {};
+
     closedPositions.forEach(pos => {
-        const dateKey = pos.closedAt ? new Date(pos.closedAt).toISOString().split('T')[0] : '未分類';
+        const dateKey = getTaiwanDateKey(pos.closedAt);
+
         if (!groupedByDate[dateKey]) {
-            groupedByDate[dateKey] = { positions: [], dailyTotalPnl: 0 };
+            groupedByDate[dateKey] = {
+                positions: [],
+                dailyTotalPnl: 0,
+            };
         }
+
         groupedByDate[dateKey].positions.push(pos);
-        groupedByDate[dateKey].dailyTotalPnl += (pos.closedPnlPercentage || 0);
+
+        groupedByDate[dateKey].dailyTotalPnl +=
+            pos.closedPnlPercentage ?? 0;
     });
 
-    const availableDates = Object.keys(groupedByDate).sort((a, b) => b.localeCompare(a));
-    const currentGroup = groupedByDate[selectedDate] || { positions: [], dailyTotalPnl: 0 };
+    // 同一天的交易依照平倉時間：早 → 晚
+    Object.values(groupedByDate).forEach(group => {
+        group.positions.sort((a, b) => {
+            return getTimestamp(a.closedAt) -
+                getTimestamp(b.closedAt);
+        });
+    });
+
+    // 左側日期：新 → 舊，「未分類」放最後
+    const availableDates = Object.keys(groupedByDate).sort((a, b) => {
+        if (a === '未分類') return 1;
+        if (b === '未分類') return -1;
+
+        return b.localeCompare(a);
+    });
+
+    // 避免選取日期不存在時，右側顯示空白
+    const effectiveDate = availableDates.includes(selectedDate)
+        ? selectedDate
+        : (availableDates[0] ?? '');
+
+    const currentGroup = groupedByDate[effectiveDate] ?? {
+        positions: [],
+        dailyTotalPnl: 0,
+    };
 
     return (
         <section className="space-y-4">
@@ -99,7 +177,7 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
                         選擇平倉日期 ({availableDates.length})
                     </h3>
                     {availableDates.map((dateStr) => {
-                        const isSelected = dateStr === selectedDate;
+                        const isSelected = dateStr === effectiveDate;
                         const dayData = groupedByDate[dateStr];
                         const isDayProfitable = dayData.dailyTotalPnl >= 0;
 
@@ -107,11 +185,10 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
                             <button
                                 key={dateStr}
                                 onClick={() => setSelectedDate(dateStr)}
-                                className={`w-full text-left p-3 rounded-lg transition-all text-sm flex flex-col gap-1.5 border ${
-                                    isSelected
-                                        ? 'bg-rose-600/20 border-rose-500/50 text-rose-300 shadow-md'
-                                        : 'bg-gray-950/40 border-gray-800/60 text-gray-300 hover:bg-gray-800/50'
-                                }`}
+                                className={`w-full text-left p-3 rounded-lg transition-all text-sm flex flex-col gap-1.5 border ${isSelected
+                                    ? 'bg-rose-600/20 border-rose-500/50 text-rose-300 shadow-md'
+                                    : 'bg-gray-950/40 border-gray-800/60 text-gray-300 hover:bg-gray-800/50'
+                                    }`}
                             >
                                 <div className="flex justify-between items-center">
                                     <span className="font-mono font-bold text-xs">📅 {dateStr}</span>
@@ -133,7 +210,7 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
                 {/* 右側：詳細平倉卡片清單 */}
                 <div className="lg:col-span-3 space-y-4">
                     <div className="text-xs text-gray-400 bg-gray-900/60 px-4 py-2.5 rounded-lg border border-gray-800 flex justify-between items-center">
-                        <span>目前檢視日期：<strong className="text-rose-400">{selectedDate}</strong></span>
+                        <span>目前檢視日期：<strong className="text-rose-400">{effectiveDate}</strong></span>
                         <span>當日總盈虧：
                             <strong className={`font-mono ${currentGroup.dailyTotalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                                 {currentGroup.dailyTotalPnl >= 0 ? '+' : ''}{currentGroup.dailyTotalPnl.toFixed(2)}%
@@ -147,15 +224,14 @@ export default function ClosedPositionsSection({ closedPositions }: ClosedPositi
                             const openDateStr = pos.openedAt && isMounted ? new Date(pos.openedAt).toLocaleString() : '';
                             const closeDateStr = pos.closedAt && isMounted ? new Date(pos.closedAt).toLocaleString() : '';
                             const durationStr = formatDuration(pos.openedAt, pos.closedAt);
-                            
+
                             return (
                                 <div key={pos.id} className="p-4 rounded-xl border border-gray-800 bg-gray-900/40 backdrop-blur shadow-lg space-y-3">
                                     <div className="flex justify-between items-start">
                                         <div className="flex items-center gap-2">
                                             <span className="font-bold text-base">{pos.symbol}</span>
-                                            <span className={`px-2 py-0.5 text-xs font-semibold rounded ${
-                                                pos.side === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
-                                            }`}>
+                                            <span className={`px-2 py-0.5 text-xs font-semibold rounded ${pos.side === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'
+                                                }`}>
                                                 {pos.side}
                                             </span>
                                         </div>
